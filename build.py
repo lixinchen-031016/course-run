@@ -6,6 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent
 GUI_ENTRY = ROOT / "src" / "course_run" / "gui_main.py"
 CLI_ENTRY = ROOT / "src" / "course_run" / "__main__.py"
@@ -42,8 +49,8 @@ def run_pyinstaller(name: str, windowed: bool, entry: Path, extra: list[str] | N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build CourseRun executables with PyInstaller")
-    parser.add_argument("--with-cli", action="store_true", help="同时构建仅供开发和诊断使用的 CLI 版本")
+    parser = argparse.ArgumentParser(description="Build the CourseRun GUI with PyInstaller")
+    parser.add_argument("--with-cli", action="store_true", help="Also build the developer CLI")
     args = parser.parse_args()
 
     try:
@@ -59,7 +66,7 @@ def main() -> int:
         stale = DIST / "course-run-cli"
         if stale.exists():
             stale.unlink()
-    print(f"构建完成: {DIST}")
+    print(f"Build complete: {DIST}")
     return 0
 
 
