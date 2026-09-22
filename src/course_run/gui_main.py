@@ -15,9 +15,22 @@ def self_test() -> int:
     return 0
 
 
+def main() -> int:
+    from course_run.gui import launch_gui
+    from course_run.single_instance import acquire_instance_lock, show_already_running
+
+    lock = acquire_instance_lock()
+    if lock is None:
+        show_already_running()
+        return 2
+    try:
+        launch_gui()
+    finally:
+        lock.release()
+    return 0
+
+
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         raise SystemExit(self_test())
-    from course_run.gui import launch_gui
-
-    launch_gui()
+    raise SystemExit(main())

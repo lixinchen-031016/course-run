@@ -345,6 +345,52 @@ PLAYBACK_TOGGLE_EXPRESSION = r"""
 })()
 """
 
+
+PLAYBACK_RECOVERY_EXPRESSION = r"""
+(async () => {
+  const visible = (el) => {
+    if (!el || !el.isConnected) return false;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+      style.visibility !== 'hidden' && Number(style.opacity || 1) > 0;
+  };
+
+  const videos = Array.from(document.querySelectorAll('video'));
+  const video = videos.find(visible) || videos.find((item) => !item.paused) || videos[0];
+  if (!video) {
+    return { ok: false, reason: 'no-video', videoCount: videos.length };
+  }
+
+  const before = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  let playError = null;
+  if (video.paused) {
+    try {
+      await video.play();
+    } catch (error) {
+      playError = { name: error?.name || 'Error', message: error?.message || String(error) };
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 450));
+
+  return {
+    ok: !video.paused,
+    reason: video.paused ? 'still-paused' : 'playing',
+    videoCount: videos.length,
+    before,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+    duration: Number.isFinite(video.duration) ? video.duration : 0,
+    readyState: video.readyState,
+    networkState: video.networkState,
+    paused: video.paused,
+    ended: video.ended,
+    playbackRate: video.playbackRate,
+    error: video.error ? { code: video.error.code, message: video.error.message } : null,
+    playError
+  };
+})()
+"""
+
 RESUME_VIDEO_EXPRESSION = r"""
 (async () => {
   const textOf = (el) => (el?.innerText || el?.textContent || '').trim();

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from course_run.config import Config, paths
-from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, PLAYBACK_TOGGLE_EXPRESSION, PREVIOUS_VIDEO_EXPRESSION, render_expression, render_resume_expression
+from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, PLAYBACK_RECOVERY_EXPRESSION, PLAYBACK_TOGGLE_EXPRESSION, PREVIOUS_VIDEO_EXPRESSION, render_expression, render_resume_expression
 from course_run.platform_adapter import activate_browser, system_name
 from course_run.controller import CourseController
 from course_run.manager import next_video
@@ -62,6 +62,11 @@ class ExpressionTests(unittest.TestCase):
         expression = render_expression(1.5)
         self.assertIn("Number('1.5')", expression)
         self.assertNotIn("__COURSE_PLAYBACK_RATE__", expression)
+
+    def test_playback_recovery_expression_never_clicks_video(self):
+        self.assertIn("await video.play()", PLAYBACK_RECOVERY_EXPRESSION)
+        self.assertNotIn("video.click()", PLAYBACK_RECOVERY_EXPRESSION)
+        self.assertIn("reason", PLAYBACK_RECOVERY_EXPRESSION)
 
 
 class PlatformTests(unittest.TestCase):
@@ -201,6 +206,94 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(controller._recovery_attempts, 0)
             run_mock.assert_not_called()
             activate_mock.assert_not_called()
+
+    def test_controller_resets_watchdog_when_resource_changes(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._last_resource_index = 1
+        controller._last_current_time = 1074.0
+        controller._recovery_attempts = 2
+        controller._stalled_since = 900.0
+        controller._loading_until = 0.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "playing",
+            "resourceIndex": 2,
+            "resourceCount": 10,
+            "currentTime": 3.0,
+            "duration": 600,
+            "paused": False,
+        }}), patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertEqual(controller._last_resource_index, 2)
+        self.assertEqual(controller._last_current_time, 3.0)
+        self.assertEqual(controller._recovery_attempts, 0)
+        self.assertIsNone(controller._stalled_since)
+        recover_mock.assert_not_called()
+
+    def test_controller_ignores_backwards_seek_without_recovery(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._last_resource_index = 1
+        controller._last_current_time = 500.0
+        controller._recovery_attempts = 2
+        controller._stalled_since = 900.0
+        controller._loading_until = 0.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "playing",
+            "resourceIndex": 1,
+            "resourceCount": 10,
+            "currentTime": 2.0,
+            "duration": 600,
+            "paused": False,
+        }}), patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertEqual(controller._last_current_time, 2.0)
+        self.assertEqual(controller._recovery_attempts, 0)
+        recover_mock.assert_not_called()
+
+    def test_controller_next_resource_resets_watchdog_immediately(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._last_resource_index = 1
+        controller._last_current_time = 1074.0
+        controller._recovery_attempts = 2
+        controller._next_recovery_at = 0.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "next-resource",
+            "resourceIndex": 1,
+            "resourceCount": 10,
+            "currentTime": 1074.0,
+            "duration": 1074.0,
+            "paused": False,
+        }}), patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertEqual(controller._last_current_time, 0.0)
+        self.assertEqual(controller._recovery_attempts, 0)
+        recover_mock.assert_not_called()
+
+    def test_controller_gentle_recovery_uses_play_not_click(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._next_recovery_at = 0.0
+        controller._last_current_time = 10.0
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "reason": "playing"}}) as evaluate_mock, \
+             patch("course_run.controller.bsk.run") as run_mock, \
+             patch("course_run.controller.activate_browser"):
+            controller._recover_once(allow_reload=False)
+        evaluate_mock.assert_called_once()
+        self.assertEqual(evaluate_mock.call_args.args[0], PLAYBACK_RECOVERY_EXPRESSION)
+        self.assertFalse(any("click" in call.args[0] for call in run_mock.call_args_list))
 
 
 if __name__ == "__main__":
