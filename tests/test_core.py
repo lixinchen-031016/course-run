@@ -273,12 +273,56 @@ class WorkerTests(unittest.TestCase):
             "currentTime": 1074.0,
             "duration": 1074.0,
             "paused": False,
+            "nextResourceIndex": 2,
         }}), patch.object(controller, "_recover_once") as recover_mock, \
              patch("course_run.controller.time.time", return_value=1000.0):
             controller._poll()
         self.assertEqual(controller._last_current_time, 0.0)
         self.assertEqual(controller._recovery_attempts, 0)
+        self.assertEqual(controller._pending_resource_index, 2)
         recover_mock.assert_not_called()
+
+    def test_controller_restores_pending_resource_instead_of_reloading(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._last_resource_index = 1
+        controller._last_current_time = 100.0
+        controller._pending_resource_index = 3
+        controller._next_recovery_at = 0.0
+        controller._loading_until = 0.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "playing",
+            "resourceIndex": 1,
+            "resourceCount": 10,
+            "currentTime": 101.0,
+            "duration": 600,
+            "paused": False,
+        }}), patch.object(controller, "_recover_pending_resource") as pending_mock, \
+             patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        pending_mock.assert_called_once_with()
+        recover_mock.assert_not_called()
+
+    def test_controller_pending_recovery_uses_resume_expression(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._pending_resource_index = 3
+        controller._next_recovery_at = 0.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "ok": True,
+            "reason": "changed",
+            "targetIndex": 3,
+        }}) as evaluate_mock, patch("course_run.controller.bsk.run"), \
+             patch("course_run.controller.activate_browser"):
+            controller._recover_pending_resource()
+        expression = evaluate_mock.call_args.args[0]
+        self.assertIn("Number('3')", expression)
+        self.assertIn("Number('0.0')", expression)
 
     def test_controller_gentle_recovery_uses_play_not_click(self):
         from unittest.mock import patch
@@ -294,6 +338,21 @@ class WorkerTests(unittest.TestCase):
         evaluate_mock.assert_called_once()
         self.assertEqual(evaluate_mock.call_args.args[0], PLAYBACK_RECOVERY_EXPRESSION)
         self.assertFalse(any("click" in call.args[0] for call in run_mock.call_args_list))
+
+    def test_controller_second_recovery_clicks_videojs_play_button(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._next_recovery_at = 0.0
+        controller._recovery_attempts = 1
+        controller._last_current_time = 10.0
+        with patch("course_run.controller.bsk.run") as run_mock, \
+             patch("course_run.controller.activate_browser"):
+            controller._recover_once(allow_reload=False)
+        click_calls = [call for call in run_mock.call_args_list if "click" in call.args[0]]
+        self.assertTrue(click_calls)
+        self.assertEqual(click_calls[0].args[0][2], "button.vjs-big-play-button")
 
 
 if __name__ == "__main__":

@@ -66,6 +66,8 @@ class CourseController:
         self._loading_until = 0.0
         self._next_recovery_at = 0.0
         self._reload_attempts = 0
+        self._pending_resource_index = 0
+        self._pending_recovery_attempts = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -243,6 +245,8 @@ class CourseController:
         now = time.time()
         self._loading_until = 0.0
         self._next_recovery_at = 0.0
+        self._pending_resource_index = 0
+        self._pending_recovery_attempts = 0
         self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
         self._next_recovery_at = now + 5.0
         self._update(
@@ -283,6 +287,8 @@ class CourseController:
             return
         self._update(action="restoring", lesson=str(previous.get("lesson") or ""))
         now = time.time()
+        self._pending_resource_index = 0
+        self._pending_recovery_attempts = 0
         self._reset_progress_watchdog(current_time, index, now, grace=20.0)
         self._next_recovery_at = now + 2.0
         try:
@@ -314,6 +320,8 @@ class CourseController:
         self._owns_session = False
         self._recovery_attempts = 0
         self._reload_attempts = 0
+        self._pending_resource_index = 0
+        self._pending_recovery_attempts = 0
         self._stalled_since = None
         self._update(state="stopped", action="stopped", paused=None, session_id=None, tab_id=None)
         self._log("GUI controller stopped")
@@ -376,6 +384,12 @@ class CourseController:
         resource_changed = resource_index > 0 and previous_index != resource_index
         rewound = self._last_current_time > 0 and current_time + 1.0 < self._last_current_time
         switching = action in {"next-resource", "skip-completed"}
+        next_resource_index = int(value.get("nextResourceIndex") or 0)
+        if switching and next_resource_index > 0:
+            if self._pending_resource_index != next_resource_index:
+                self._pending_recovery_attempts = 0
+                self._log(f"next resource target set to {next_resource_index}")
+            self._pending_resource_index = next_resource_index
 
         if switching:
             # The DOM can keep reporting the previous video for a short time
@@ -397,6 +411,17 @@ class CourseController:
                 grace=8.0,
                 reason=f"playback position moved backwards to {current_time:.2f}; resetting progress watchdog",
             )
+
+        if resource_changed and self._pending_resource_index == resource_index:
+            self._log(f"pending resource {resource_index} loaded; watchdog baseline updated")
+            self._pending_resource_index = 0
+            self._pending_recovery_attempts = 0
+
+        pending = self._pending_resource_index
+        pending_mismatch = pending > 0 and resource_index > 0 and resource_index != pending
+        if pending_mismatch and now >= self._loading_until and now >= self._next_recovery_at:
+            self._recover_pending_resource()
+            return
 
         advanced = current_time > self._last_current_time + 0.15 and not switching
         if action in {"playing", "resume"} and not state["paused"] and advanced:
@@ -425,7 +450,13 @@ class CourseController:
                 self._stalled_since = now
         elif action in {"wait-video", "wait-player"}:
             if now >= self._loading_until and now >= self._next_recovery_at:
-                if self._reload_attempts < 1:
+                if self._pending_resource_index > 0:
+                    self._log(
+                        f"video load wait exceeded; restoring pending resource "
+                        f"{self._pending_resource_index}"
+                    )
+                    self._recover_pending_resource()
+                elif self._reload_attempts < 1:
                     self._log("video load wait exceeded; checking browser/page")
                     self._recover_once(allow_reload=True)
                 else:
@@ -446,7 +477,44 @@ class CourseController:
             self._session_id = None
             self._tab_id = None
             self._owns_session = False
+            self._pending_resource_index = 0
+            self._pending_recovery_attempts = 0
             self._update(state="complete", action="complete")
+
+    def _recover_pending_resource(self) -> None:
+        pending = self._pending_resource_index
+        if not self._session_id or not self._tab_id or pending <= 0:
+            return
+        now = time.time()
+        if now < self._next_recovery_at:
+            return
+        self._pending_recovery_attempts += 1
+        state = self.snapshot()
+        self._log(
+            f"pending resource recovery attempt {self._pending_recovery_attempts}: "
+            f"current={state.get('resourceIndex')} target={pending}"
+        )
+        try:
+            bsk.run(["tab", "select", "--session", self._session_id, self._tab_id], timeout=15)
+        except Exception:
+            pass
+        activate_browser(title_hint=str(state.get("pageTitle") or state.get("lesson") or ""))
+        try:
+            payload = self._evaluate(render_resume_expression(pending, 0.0), timeout=35, retries=3)
+            result = payload.get("value") or {}
+            self._log(
+                "pending resource recovery result: "
+                f"ok={result.get('ok')}, reason={result.get('reason')}, "
+                f"target={result.get('targetIndex')}, current={result.get('currentIndex')}, "
+                f"paused={result.get('paused')}"
+            )
+            if result.get("reason") in {"platform-ahead", "all-completed"}:
+                self._pending_resource_index = 0
+                self._pending_recovery_attempts = 0
+        except Exception as exc:
+            self._log(f"pending resource recovery failed: {exc}")
+        self._loading_until = max(self._loading_until, now + 12.0)
+        self._next_recovery_at = now + 10.0
 
     def _recover_once(self, allow_reload: bool = False) -> None:
         if not self._session_id or not self._tab_id:
@@ -496,7 +564,12 @@ class CourseController:
                     return
             elif attempt == 2:
                 clicked = False
-                for selector in ('[aria-label="播放"]', '[aria-label="播放视频"]'):
+                for selector in (
+                    "button.vjs-big-play-button",
+                    "button.vjs-play-control",
+                    '[aria-label="播放"]',
+                    '[aria-label="播放视频"]',
+                ):
                     try:
                         bsk.run([
                             "click", "--selector", selector,
@@ -545,6 +618,12 @@ class CourseController:
             lesson=str(value.get("to") or ""),
         )
         now = time.time()
+        if direction == "next":
+            target = int(value.get("nextIndex") or 0)
+            self._pending_resource_index = target
+        else:
+            self._pending_resource_index = 0
+        self._pending_recovery_attempts = 0
         self._reset_progress_watchdog(0.0, None, now, grace=20.0)
         self._next_recovery_at = now + 2.0
         self._wait_and_poll(0.8)
