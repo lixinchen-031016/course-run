@@ -8,7 +8,7 @@ from pathlib import Path
 
 from course_run.config import Config, paths
 from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, PLAYBACK_TOGGLE_EXPRESSION, PREVIOUS_VIDEO_EXPRESSION, render_expression, render_resume_expression
-from course_run.platform_adapter import system_name
+from course_run.platform_adapter import activate_browser, system_name
 from course_run.controller import CourseController
 from course_run.manager import next_video
 from course_run.worker import recover_playback, run_worker
@@ -180,6 +180,13 @@ class WorkerTests(unittest.TestCase):
             self.assertIn("Number('7')", expression)
             self.assertIn("Number('123.5')", expression)
             self.assertEqual(controller.snapshot()["lesson"], "Lesson 7")
+
+    def test_windows_activation_prefers_native_window_restore(self):
+        from unittest.mock import patch
+        with patch("course_run.platform_adapter.system_name", return_value="windows"), \
+             patch("course_run.platform_adapter._restore_windows_browser", return_value=True) as restore_mock:
+            self.assertTrue(activate_browser(title_hint="Course"))
+            restore_mock.assert_called_once_with("Microsoft Edge", "Course")
 
 
 if __name__ == "__main__":

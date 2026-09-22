@@ -61,6 +61,7 @@ class CourseController:
         self._last_progress_time = time.time()
         self._last_current_time = 0.0
         self._last_resource_index = 0
+        self._recovery_anchor_current = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -217,6 +218,7 @@ class CourseController:
         self._last_progress_time = time.time()
         self._last_current_time = 0.0
         self._last_resource_index = 0
+        self._recovery_anchor_current = 0.0
         self._update(
             state="running",
             action="starting",
@@ -303,6 +305,7 @@ class CourseController:
             "state": "complete" if action == "complete" else "running",
             "action": action,
             "lesson": str(value.get("lesson") or ""),
+            "pageTitle": str(value.get("title") or ""),
             "next": str(value.get("nextLesson") or value.get("nextSection") or ""),
             "resourceIndex": int(value.get("resourceIndex") or 0),
             "resourceCount": int(value.get("resourceCount") or 0),
@@ -334,13 +337,19 @@ class CourseController:
             except Exception as exc:
                 self._log(f"resize agent window failed: {exc}")
 
-        if action in {"playing", "resume"} and not state["paused"] and current_time > self._last_current_time + 0.15:
+        now = time.time()
+        advanced = current_time > self._last_current_time + 0.15
+        if action in {"playing", "resume"} and not state["paused"] and advanced:
             self._last_current_time = current_time
             self._last_resource_index = state["resourceIndex"]
-            self._last_progress_time = time.time()
-            self._stalled_since = None
+            self._last_progress_time = now
+            if self._recovery_attempts and current_time > self._recovery_anchor_current + 2.0:
+                self._log("playback recovered and progress is stable")
+                self._recovery_attempts = 0
+                self._stalled_since = None
+            elif not self._recovery_attempts:
+                self._stalled_since = None
         elif action in {"playing", "resume"} and not state["paused"] and load_config().keep_browser_awake:
-            now = time.time()
             if self._stalled_since is None:
                 self._stalled_since = now
             elif now - self._stalled_since >= 3.5 and now - self._last_progress_time >= 3.5:
@@ -348,8 +357,9 @@ class CourseController:
                 self._recover_once()
                 self._stalled_since = now + 2.0
 
-        if action in {"playing", "resume", "next-resource", "loading-catalog", "wait-player"}:
+        if action in {"next-resource", "loading-catalog", "wait-player"}:
             self._recovery_attempts = 0
+            self._stalled_since = None
         if action == "needs-user-gesture":
             self._recover_once()
         elif action == "complete":
@@ -369,12 +379,16 @@ class CourseController:
             return
         self._recovery_attempts += 1
         attempt = self._recovery_attempts
+        if attempt == 1:
+            self._recovery_anchor_current = self._last_current_time
+        state = self.snapshot()
+        title_hint = str(state.get("pageTitle") or state.get("lesson") or "")
         self._log(f"recovery attempt {attempt}")
-        activate_browser()
         try:
             bsk.run(["tab", "select", "--session", self._session_id, self._tab_id], timeout=15)
         except Exception:
             pass
+        activate_browser(title_hint=title_hint)
         try:
             if attempt == 1:
                 bsk.run([
@@ -422,5 +436,6 @@ class CourseController:
         )
         self._wait_and_poll(1.2)
         self._recovery_attempts = 0
+        self._stalled_since = None
         self._recover_once()
         self._wait_and_poll(0.8)

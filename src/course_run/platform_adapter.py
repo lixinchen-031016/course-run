@@ -146,7 +146,69 @@ def worker_command(state_path: pathlib.Path) -> list[str]:
     return [sys.executable, "-m", "course_run", "worker", "--state", str(state_path)]
 
 
-def activate_browser(preferred: str = "Microsoft Edge") -> bool:
+def _windows_process_name(pid: int) -> str:
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return ""
+    try:
+        size = ctypes.c_ulong(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return ""
+        return os.path.basename(buffer.value).lower()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _restore_windows_browser(preferred: str, title_hint: str | None = None) -> bool:
+    user32 = ctypes.windll.user32
+    candidates: list[tuple[int, int, str]] = []
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        title_length = user32.GetWindowTextLengthW(hwnd)
+        if title_length <= 0:
+            return True
+        title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+        user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
+        class_buffer = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_buffer, len(class_buffer))
+        if class_buffer.value != "Chrome_WidgetWin_1":
+            return True
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        process_name = _windows_process_name(pid.value)
+        if process_name not in {"msedge.exe", "chrome.exe"}:
+            return True
+        title = title_buffer.value
+        score = 0
+        if title_hint and title_hint.strip() and title_hint.lower() in title.lower():
+            score += 10
+        if preferred.lower() in title.lower():
+            score += 3
+        candidates.append((score, int(hwnd), title))
+        return True
+
+    try:
+        user32.EnumWindows(callback_type(callback), 0)
+    except Exception:
+        return False
+    if not candidates:
+        return False
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    hwnd = candidates[0][1]
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.BringWindowToTop(hwnd)
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
+def activate_browser(preferred: str = "Microsoft Edge", title_hint: str | None = None) -> bool:
     """Best-effort activation of the browser that owns the Agent Window."""
     system = system_name()
     try:
@@ -170,6 +232,8 @@ def activate_browser(preferred: str = "Microsoft Edge") -> bool:
                 return False
 
         if system == "windows":
+            if _restore_windows_browser(preferred, title_hint):
+                return True
             script = f"(New-Object -ComObject WScript.Shell).AppActivate('{preferred}')"
             try:
                 result = subprocess.run(
