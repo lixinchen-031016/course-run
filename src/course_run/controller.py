@@ -516,6 +516,26 @@ class CourseController:
         self._loading_until = max(self._loading_until, now + 12.0)
         self._next_recovery_at = now + 10.0
 
+    def _click_videojs_play_button(self) -> bool:
+        if not self._session_id or not self._tab_id:
+            return False
+        for selector in (
+            "button.vjs-big-play-button",
+            "button.vjs-play-control",
+            '[aria-label="播放"]',
+            '[aria-label="播放视频"]',
+        ):
+            try:
+                bsk.run([
+                    "click", "--selector", selector,
+                    "--session", self._session_id, "--tab-id", self._tab_id,
+                ], timeout=15)
+                self._log(f"clicked play control: {selector}")
+                return True
+            except Exception:
+                continue
+        return False
+
     def _recover_once(self, allow_reload: bool = False) -> None:
         if not self._session_id or not self._tab_id:
             return
@@ -560,26 +580,17 @@ class CourseController:
                     f"paused={value.get('paused')}, ready={value.get('readyState')}, "
                     f"error={value.get('playError') or value.get('error')}"
                 )
+                play_error = value.get("playError") or {}
+                autoplay_blocked = play_error.get("name") == "NotAllowedError"
+                if not value.get("ok") and (value.get("paused") is True or autoplay_blocked):
+                    if self._click_videojs_play_button():
+                        self._loading_until = max(self._loading_until, now + 6.0)
+                        self._next_recovery_at = now + 6.0
+                        return
                 if not value.get("ok") and reload_once():
                     return
             elif attempt == 2:
-                clicked = False
-                for selector in (
-                    "button.vjs-big-play-button",
-                    "button.vjs-play-control",
-                    '[aria-label="播放"]',
-                    '[aria-label="播放视频"]',
-                ):
-                    try:
-                        bsk.run([
-                            "click", "--selector", selector,
-                            "--session", self._session_id, "--tab-id", self._tab_id,
-                        ], timeout=15)
-                        clicked = True
-                        break
-                    except Exception:
-                        continue
-                if not clicked:
+                if not self._click_videojs_play_button():
                     self._evaluate(PLAYBACK_RECOVERY_EXPRESSION, timeout=20, retries=2)
             elif reload_once():
                 return

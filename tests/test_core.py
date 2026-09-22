@@ -354,6 +354,27 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(click_calls)
         self.assertEqual(click_calls[0].args[0][2], "button.vjs-big-play-button")
 
+    def test_autoplay_blocked_clicks_videojs_on_first_recovery(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._next_recovery_at = 0.0
+        controller._last_current_time = 10.0
+        blocked = {
+            "ok": False,
+            "reason": "still-paused",
+            "paused": True,
+            "playError": {"name": "NotAllowedError", "message": "blocked"},
+        }
+        with patch.object(controller, "_evaluate", return_value={"value": blocked}), \
+             patch("course_run.controller.bsk.run") as run_mock, \
+             patch("course_run.controller.activate_browser"):
+            controller._recover_once(allow_reload=False)
+        click_calls = [call for call in run_mock.call_args_list if "click" in call.args[0]]
+        self.assertTrue(click_calls)
+        self.assertEqual(click_calls[0].args[0][2], "button.vjs-big-play-button")
+
 
 if __name__ == "__main__":
     unittest.main()
