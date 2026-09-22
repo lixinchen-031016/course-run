@@ -60,6 +60,24 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.sh | sh
 ```
 
+### Windows 网络排查
+
+如果 `raw.githubusercontent.com` 无法访问，可使用项目提供的备用安装脚本，它会尝试 GitHub 官方 Release 和镜像，并校验官方 SHA256：
+
+```powershell
+.\scripts\install_bsk_windows.ps1
+```
+
+也可以手动下载官方 Windows x64 包：
+
+`https://github.com/Tencent/BrowserSkill/releases/download/cli-v0.3.0/bsk-v0.3.0-x86_64-pc-windows-msvc.zip`
+
+校验值：
+
+```text
+CD31665559D0FAAE2CFB79AB1C3CB6854BCE10B4FDE510BE015456E8370F629E
+```
+
 ## 开发运行
 
 macOS / Linux：
