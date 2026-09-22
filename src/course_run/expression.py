@@ -77,14 +77,15 @@ AUTOPLAY_EXPRESSION = r"""
   );
   const modalContent = modal?.querySelector('.fish-modal-confirm-content')?.textContent?.trim() || '';
   const knownCompletionNotice = '须学习完课程的视频才可获得该课程视频的学时';
+  let dismissedModal = false;
 
   if (modal && modalContent === knownCompletionNotice) {
     modal.querySelector('.fish-modal-confirm-btns button')?.click();
-    return { ...base, action: 'dismissed-modal', modalText: modalContent };
+    dismissedModal = true;
   }
 
   if (!video) {
-    return { ...base, action: 'wait-video', paused: null, currentTime: null, duration: null };
+    return { ...base, action: 'wait-video', paused: null, currentTime: null, duration: null, dismissedModal };
   }
 
   const desiredPlaybackRate = Number('__COURSE_PLAYBACK_RATE__');
@@ -148,15 +149,16 @@ AUTOPLAY_EXPRESSION = r"""
         ...state,
         action: 'next-resource',
         nextLesson: nextText,
-        nextResourceIndex: nextIndex + 1
+        nextResourceIndex: nextIndex + 1,
+        dismissedModal
       };
     }
 
     if (collapsedHeaders.length > 0) {
-      return { ...state, action: 'loading-catalog' };
+      return { ...state, action: 'loading-catalog', dismissedModal };
     }
 
-    return { ...state, action: 'complete' };
+    return { ...state, action: 'complete', dismissedModal };
   }
 
   if (video.paused && video.readyState >= 2) {
@@ -174,11 +176,12 @@ AUTOPLAY_EXPRESSION = r"""
       paused: video.paused,
       currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
       playError,
-      action: video.paused ? 'needs-user-gesture' : 'resume'
+      action: video.paused ? 'needs-user-gesture' : 'resume',
+      dismissedModal
     };
   }
 
-  return { ...state, action: video.paused ? 'wait-player' : 'playing' };
+  return { ...state, action: video.paused ? 'wait-player' : 'playing', dismissedModal };
 })()
 """
 

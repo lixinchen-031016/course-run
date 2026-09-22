@@ -28,8 +28,10 @@ class ConfigTests(unittest.TestCase):
 
 class ExpressionTests(unittest.TestCase):
     def test_expression_has_control_actions(self):
-        for action in ["next-resource", "complete", "resume", "dismissed-modal", "wait-video"]:
+        for action in ["next-resource", "complete", "resume", "wait-video"]:
             self.assertIn(action, AUTOPLAY_EXPRESSION)
+        self.assertIn("dismissedModal", AUTOPLAY_EXPRESSION)
+        self.assertIn("须学习完课程的视频才可获得该课程视频的学时", AUTOPLAY_EXPRESSION)
 
     def test_next_video_expression_exists(self):
         self.assertIn("nextIndex", NEXT_VIDEO_EXPRESSION)
@@ -240,6 +242,7 @@ class WorkerTests(unittest.TestCase):
         controller._tab_id = "tab"
         controller._last_resource_index = 1
         controller._last_current_time = 500.0
+        controller._last_duration = 600.0
         controller._recovery_attempts = 2
         controller._stalled_since = 900.0
         controller._loading_until = 0.0
@@ -255,6 +258,28 @@ class WorkerTests(unittest.TestCase):
             controller._poll()
         self.assertEqual(controller._last_current_time, 2.0)
         self.assertEqual(controller._recovery_attempts, 0)
+        recover_mock.assert_not_called()
+
+    def test_controller_switches_when_natural_end_resets_to_zero(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._last_resource_index = 9
+        controller._last_current_time = 99.5
+        controller._last_duration = 100.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "playing",
+            "resourceIndex": 9,
+            "resourceCount": 10,
+            "currentTime": 0.0,
+            "duration": 100.0,
+            "paused": True,
+        }}), patch.object(controller, "_command_switch") as switch_mock, \
+             patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        switch_mock.assert_called_once_with("next")
         recover_mock.assert_not_called()
 
     def test_controller_next_resource_resets_watchdog_immediately(self):

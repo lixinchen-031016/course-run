@@ -61,6 +61,7 @@ class CourseController:
         self._stalled_since: float | None = None
         self._last_progress_time = time.time()
         self._last_current_time = 0.0
+        self._last_duration = 0.0
         self._last_resource_index = 0
         self._recovery_anchor_current = 0.0
         self._loading_until = 0.0
@@ -121,6 +122,7 @@ class CourseController:
     ) -> None:
         """Reset progress tracking after a resource change, seek, or reload."""
         self._last_current_time = max(0.0, float(current_time or 0))
+        self._last_duration = 0.0
         if resource_index is not None:
             self._last_resource_index = max(0, int(resource_index or 0))
         self._last_progress_time = now
@@ -384,6 +386,15 @@ class CourseController:
         resource_changed = resource_index > 0 and previous_index != resource_index
         rewound = self._last_current_time > 0 and current_time + 1.0 < self._last_current_time
         switching = action in {"next-resource", "skip-completed"}
+        tail_window = max(4.0, float(state["playbackRate"] or 1.0) * 3.0)
+        natural_end = (
+            not switching
+            and duration > 0
+            and self._last_duration > 0
+            and abs(duration - self._last_duration) <= 2.0
+            and self._last_current_time >= self._last_duration - tail_window
+            and current_time <= 1.0
+        )
         next_resource_index = int(value.get("nextResourceIndex") or 0)
         if switching and next_resource_index > 0:
             if self._pending_resource_index != next_resource_index:
@@ -391,6 +402,13 @@ class CourseController:
                 self._log(f"next resource target set to {next_resource_index}")
             self._pending_resource_index = next_resource_index
 
+        if natural_end:
+            self._log(
+                f"video completed at index={resource_index}; "
+                "current time reset to zero, switching next"
+            )
+            self._command_switch("next")
+            return
         if switching:
             # The DOM can keep reporting the previous video for a short time
             # while the new resource loads. Never compare both timelines.
@@ -426,6 +444,7 @@ class CourseController:
         advanced = current_time > self._last_current_time + 0.15 and not switching
         if action in {"playing", "resume"} and not state["paused"] and advanced:
             self._last_current_time = current_time
+            self._last_duration = duration
             if resource_index > 0:
                 self._last_resource_index = resource_index
             self._last_progress_time = now
