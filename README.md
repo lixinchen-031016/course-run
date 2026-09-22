@@ -106,6 +106,20 @@ Windows PowerShell：
 - Windows：`dist/CourseRun.exe`
 - Linux：`dist/CourseRun`
 
+## CI/CD
+
+GitHub Actions 工作流位于 `.github/workflows/build.yml`。
+
+- 推送 `main`：运行测试并构建 Windows x64 / macOS ARM64 制品，发布滚动 `nightly` 预发布。
+- 推送 `v*` 标签：构建并创建正式 GitHub Release。
+- Pull Request：运行测试和双平台构建，不发布 Release。
+- 手动触发：可在 Actions 页面执行。
+
+发布产物：
+
+- `CourseRun.exe`：Windows x86_64 单文件程序
+- `CourseRun-macOS-arm64.dmg`：macOS Apple Silicon 安装镜像
+
 ## 数据目录
 
 - Windows：`%LOCALAPPDATA%\CourseRun`
