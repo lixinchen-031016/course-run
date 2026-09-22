@@ -31,6 +31,9 @@ class Config:
     browser: str = ""
     playback_rate: float = 1.0
     open_dashboard: bool = True
+    auto_start: bool = False
+    resume_last: bool = True
+    keep_browser_awake: bool = True
 
     @classmethod
     def from_dict(cls, value: dict[str, Any] | None) -> "Config":
@@ -49,6 +52,9 @@ class Config:
         self.browser = str(self.browser or "").strip()
         self.playback_rate = min(4.0, max(0.25, float(self.playback_rate or 1.0)))
         self.open_dashboard = bool(self.open_dashboard)
+        self.auto_start = bool(self.auto_start)
+        self.resume_last = bool(self.resume_last)
+        self.keep_browser_awake = bool(self.keep_browser_awake)
         return self
 
 

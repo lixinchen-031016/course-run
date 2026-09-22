@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 
 from course_run.config import Config, paths
-from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, render_expression
+from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, PLAYBACK_TOGGLE_EXPRESSION, PREVIOUS_VIDEO_EXPRESSION, render_expression, render_resume_expression
 from course_run.platform_adapter import system_name
+from course_run.controller import CourseController
 from course_run.manager import next_video
 from course_run.worker import recover_playback, run_worker
 
@@ -32,7 +33,30 @@ class ExpressionTests(unittest.TestCase):
 
     def test_next_video_expression_exists(self):
         self.assertIn("nextIndex", NEXT_VIDEO_EXPRESSION)
-        self.assertIn("currentResources[index + 1]?.click()", NEXT_VIDEO_EXPRESSION)
+        self.assertIn("currentResources[targetIndex]?.click()", NEXT_VIDEO_EXPRESSION)
+        self.assertIn("已学完", NEXT_VIDEO_EXPRESSION)
+
+    def test_previous_video_expression_exists(self):
+        self.assertIn("previousIndex", PREVIOUS_VIDEO_EXPRESSION)
+        self.assertIn("currentResources[index - 1]?.click()", PREVIOUS_VIDEO_EXPRESSION)
+
+    def test_autoplay_expression_skips_completed_items(self):
+        self.assertIn("skip-completed", AUTOPLAY_EXPRESSION)
+        self.assertIn("已学完", AUTOPLAY_EXPRESSION)
+        self.assertIn("findNextIncomplete", AUTOPLAY_EXPRESSION)
+        self.assertIn("duration - 0.35", AUTOPLAY_EXPRESSION)
+        self.assertIn("action: 'next-resource'", AUTOPLAY_EXPRESSION)
+
+    def test_resume_expression_replaces_index_and_time(self):
+        expression = render_resume_expression(7, 123.5)
+        self.assertIn("Number('7')", expression)
+        self.assertIn("Number('123.5')", expression)
+        self.assertNotIn("__RESUME_INDEX__", expression)
+        self.assertNotIn("__RESUME_TIME__", expression)
+
+    def test_playback_toggle_expression_exists(self):
+        self.assertIn("video.pause()", PLAYBACK_TOGGLE_EXPRESSION)
+        self.assertIn("await video.play()", PLAYBACK_TOGGLE_EXPRESSION)
 
     def test_expression_playback_rate_replacement(self):
         expression = render_expression(1.5)
@@ -46,6 +70,18 @@ class PlatformTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
+    def setUp(self):
+        self._old_data_dir = os.environ.get("COURSE_RUN_DATA_DIR")
+        self._temp_data_dir = tempfile.TemporaryDirectory()
+        os.environ["COURSE_RUN_DATA_DIR"] = self._temp_data_dir.name
+
+    def tearDown(self):
+        self._temp_data_dir.cleanup()
+        if self._old_data_dir is None:
+            os.environ.pop("COURSE_RUN_DATA_DIR", None)
+        else:
+            os.environ["COURSE_RUN_DATA_DIR"] = self._old_data_dir
+
     def test_worker_once_writes_status(self):
         with tempfile.TemporaryDirectory() as directory:
             old = os.environ.get("COURSE_RUN_DATA_DIR")
@@ -110,6 +146,40 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["to"], "Lesson 2")
         self.assertEqual(result["session_id"], "session")
+
+    def test_controller_switch_commands_use_correct_expression(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "A", "to": "B"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"), \
+             patch.object(controller, "_recover_once"):
+            controller._command_switch("next")
+            self.assertEqual(evaluate_mock.call_args.args[0], NEXT_VIDEO_EXPRESSION)
+            self.assertEqual(controller.snapshot()["action"], "switching-next")
+
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "B", "to": "A"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"), \
+             patch.object(controller, "_recover_once"):
+            controller._command_switch("previous")
+            self.assertEqual(evaluate_mock.call_args.args[0], PREVIOUS_VIDEO_EXPRESSION)
+            self.assertEqual(controller.snapshot()["action"], "switching-previous")
+
+    def test_controller_resume_uses_saved_position(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"), \
+             patch.object(controller, "_recover_once"):
+            controller._resume_saved_position({"resourceIndex": 7, "currentTime": 123.5, "lesson": "Lesson 7"})
+            expression = evaluate_mock.call_args.args[0]
+            self.assertIn("Number('7')", expression)
+            self.assertIn("Number('123.5')", expression)
+            self.assertEqual(controller.snapshot()["lesson"], "Lesson 7")
 
 
 if __name__ == "__main__":

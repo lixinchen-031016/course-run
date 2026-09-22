@@ -88,3 +88,12 @@ def sessions() -> list[dict[str, Any]]:
 
 def reload(session_id: str, tab_id: str) -> BskResult:
     return run(["reload", "--session", session_id, "--tab-id", tab_id], timeout=30)
+
+
+def resize_window(session_id: str, width: int = 1200, height: int = 800) -> BskResult:
+    return run([
+        "window", "resize",
+        "--session", session_id,
+        "--width", str(width),
+        "--height", str(height),
+    ], timeout=15)

@@ -148,26 +148,46 @@ def worker_command(state_path: pathlib.Path) -> list[str]:
 
 def activate_browser(preferred: str = "Microsoft Edge") -> bool:
     """Best-effort activation of the browser that owns the Agent Window."""
+    system = system_name()
     try:
-        system = system_name()
         if system == "macos":
             script = f'tell application "{preferred}" to activate'
-            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-            return result.returncode == 0
-        if system == "windows":
-            script = f"(New-Object -ComObject WScript.Shell).AppActivate('{preferred}')"
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
-                capture_output=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            return result.returncode == 0
-        for command in (["wmctrl", "-a", preferred], ["xdotool", "search", "--name", preferred, "windowactivate"]):
             try:
-                result = subprocess.run(command, capture_output=True)
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
                 if result.returncode == 0:
                     return True
-            except FileNotFoundError:
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            try:
+                result = subprocess.run(["open", "-a", preferred], capture_output=True, timeout=4)
+                return result.returncode == 0
+            except (subprocess.TimeoutExpired, OSError):
+                return False
+
+        if system == "windows":
+            script = f"(New-Object -ComObject WScript.Shell).AppActivate('{preferred}')"
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", script],
+                    capture_output=True,
+                    timeout=4,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                return result.returncode == 0
+            except (subprocess.TimeoutExpired, OSError):
+                return False
+
+        for command in (["wmctrl", "-a", preferred], ["xdotool", "search", "--name", preferred, "windowactivate"]):
+            try:
+                result = subprocess.run(command, capture_output=True, timeout=3)
+                if result.returncode == 0:
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError):
                 continue
     except Exception:
         pass

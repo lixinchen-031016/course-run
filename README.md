@@ -1,29 +1,43 @@
 # CourseRun
 
-一个使用 Python 3 + Tkinter 编写的跨平台 BrowserSkill 课程自动播放小程序。
+一个纯 GUI 的跨平台 BrowserSkill 课程自动播放器，使用 Python 3 + Tkinter 开发。
 
-程序会自动识别当前系统：
+程序会自动识别 Windows、macOS、Linux，并选择对应的后台进程、浏览器激活、`bsk` 查找和数据目录逻辑。
 
-- Windows
-- macOS
-- Linux
+## 界面功能
 
-然后选择对应的数据目录、后台进程启动方式、进程结束方式、浏览器打开方式和 `bsk` 查找路径。
+- 开始播放
+- 暂停 / 继续
+- 上一视频
+- 下一视频
+- 停止
+- 环境检测
+- 打开日志目录
+- 实时状态、播放进度、视频序号和日志
 
-## 功能
+快捷键：
 
-- 图形化桌面界面，无需命令行操作
-- 自动调用本机 BrowserSkill `bsk`
-- 创建独立 Agent Window 播放课程
-- 自动展开多级课程目录
-- 视频自然结束后切换下一节
-- 自动恢复暂停视频
-- 一键切换到下一个视频
-- 自动处理“须学习完课程的视频才可获得学时”提示
-- 后台进程与终端/界面分离
-- 支持状态、进度和日志查看
-- 支持 Windows、macOS、Linux
-- 无第三方运行依赖，PyInstaller 仅用于打包
+- `←`：上一视频
+- `→`：下一视频
+- `Space`：暂停 / 继续
+- `Ctrl+Enter`：开始播放
+
+## 实时响应机制
+
+GUI 内置单进程控制器，所有 BrowserSkill 操作在同一个线程中串行执行：
+
+- 按钮点击后立即进入命令队列
+- 不会与后台 Worker 抢占 BrowserSkill 会话
+- 播放状态约每 `0.8` 秒检查一次
+- 视频暂停后自动恢复
+- 自动结束切换下一节
+- 自动识别“已学完 / 已完成播放 / 已完成”的视频并跳过
+- 记住上次课程、视频和时间
+- 重新打开后自动恢复最新播放进度
+- 多次恢复失败时自动尝试重载页面
+- 自动关闭已知课程提示弹窗
+- 浏览器窗口最小化或播放进度停滞时自动尝试恢复
+- 本地进度与平台进度取较新位置，避免重新打开后倒退
 
 ## 环境要求
 
@@ -48,11 +62,12 @@ curl -fsSL https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.s
 
 ## 开发运行
 
+macOS / Linux：
+
 ```bash
-cd /Users/lixinchen/PycharmProjects/course-run
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
-.venv/bin/course-run
+.venv/bin/python -m course_run.gui_main
 ```
 
 Windows PowerShell：
@@ -60,39 +75,12 @@ Windows PowerShell：
 ```powershell
 py -m venv .venv
 .venv\Scripts\python -m pip install -e .
-.venv\Scripts\course-run.exe
-```
-
-不传参数时会直接打开 Tkinter 图形界面。
-
-## 命令行
-
-```bash
-course-run gui
-course-run start --url "https://example.com/course"
-course-run status
-course-run logs
-course-run next
-course-run stop
-course-run doctor
-course-run open-logs
-```
-
-## 数据目录
-
-- Windows：`%LOCALAPPDATA%\CourseRun`
-- macOS：`~/Library/Application Support/CourseRun`
-- Linux：`${XDG_DATA_HOME:-~/.local/share}/course-run`
-
-可通过环境变量覆盖：
-
-```bash
-export COURSE_RUN_DATA_DIR=/path/to/data
+.venv\Scripts\python -m course_run.gui_main
 ```
 
 ## 打包
 
-PyInstaller 需要在目标系统上执行，通常不能在 macOS 上直接生成 Windows exe。
+PyInstaller 需要在目标系统上执行。
 
 macOS：
 
@@ -112,16 +100,23 @@ Windows PowerShell：
 .\scripts\build_windows.ps1
 ```
 
-也可以直接运行：
+默认只生成 GUI：
+
+- macOS：`dist/CourseRun.app`
+- Windows：`dist/CourseRun.exe`
+- Linux：`dist/CourseRun`
+
+## 数据目录
+
+- Windows：`%LOCALAPPDATA%\CourseRun`
+- macOS：`~/Library/Application Support/CourseRun`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/course-run`
+
+可通过环境变量覆盖：
 
 ```bash
-python3 build.py
+export COURSE_RUN_DATA_DIR=/path/to/data
 ```
-
-生成结果位于：
-
-- `dist/CourseRun.app` 或 GUI 可执行文件
-- `dist/course-run-cli` 或 `course-run-cli.exe`
 
 ## 测试
 
@@ -134,14 +129,12 @@ python3 build.py
 ```text
 course-run/
 ├── src/course_run/
-│   ├── cli.py                 # 命令行入口
-│   ├── gui.py                 # Tkinter 图形界面
-│   ├── manager.py             # 启动、停止、切下一节、状态管理
-│   ├── worker.py              # 后台播放循环
+│   ├── gui.py                 # GUI 界面
+│   ├── controller.py          # 实时串行浏览器控制器
 │   ├── bsk.py                 # BrowserSkill CLI 封装
-│   ├── expression.py          # 浏览器自动播放脚本
-│   ├── config.py              # 配置、状态、日志路径
-│   └── platform_adapter.py    # 系统识别与平台差异处理
+│   ├── expression.py          # 播放、上一节、下一节脚本
+│   ├── config.py              # 配置与路径
+│   └── platform_adapter.py    # 系统自动识别与平台差异处理
 ├── tests/                     # 单元测试
 ├── scripts/                   # 各平台打包脚本
 └── build.py                   # PyInstaller 构建入口
@@ -149,6 +142,9 @@ course-run/
 
 ## 注意
 
-- 课程平台最终是否记为“已完成”取决于平台自身规则。
-- 登录失效、验证码、未知人工确认弹窗仍可能需要用户处理。
-- 需要保持电脑唤醒、浏览器打开且 BrowserSkill 扩展在线。
+- 手动切换会跳过视频，平台可能不把被跳过的视频计入完成时长。
+- 登录失效、验证码或未知人工确认弹窗仍需要用户处理。
+- 建议最小化 CourseRun 窗口，而不要最小化 Edge Agent Window。
+- 即使 Edge 被最小化，开启“浏览器最小化时自动恢复”后程序会尝试重新激活窗口并恢复播放。
+- 需要保持电脑唤醒、浏览器打开且 BrowserSkill 扩展到在线状态。
+- 本地记录和平台进度会取较新的有效位置；如果平台判定某个视频尚未完成，平台可能优先返回该视频继续播放。
