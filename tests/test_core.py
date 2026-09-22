@@ -188,6 +188,20 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(activate_browser(title_hint="Course"))
             restore_mock.assert_called_once_with("Microsoft Edge", "Course")
 
+    def test_controller_recovery_respects_cooldown(self):
+        import time
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._next_recovery_at = time.time() + 10
+        with patch("course_run.controller.bsk.run") as run_mock, \
+             patch("course_run.controller.activate_browser") as activate_mock:
+            controller._recover_once(allow_reload=False)
+            self.assertEqual(controller._recovery_attempts, 0)
+            run_mock.assert_not_called()
+            activate_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

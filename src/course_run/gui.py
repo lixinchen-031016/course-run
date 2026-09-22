@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import queue
+import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Any
@@ -18,6 +19,7 @@ class CourseRunApp:
         self.root.minsize(820, 620)
 
         self.update_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self.ui_events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.last_log_text = ""
         self.last_state: dict[str, Any] = {}
 
@@ -182,17 +184,14 @@ class CourseRunApp:
         self.controller.submit("next")
 
     def _doctor(self) -> None:
-        try:
-            from .manager import get_doctor_report
-            report = get_doctor_report()
-            messagebox.showinfo(
-                "环境检测",
-                f"BrowserSkill: {report['version']}\n\n"
-                f"{report['doctor'].get('stdout') or report['doctor'].get('stderr')}\n"
-                f"已连接浏览器: {len(report.get('browsers') or [])}",
-            )
-        except Exception as exc:
-            messagebox.showerror("环境检测失败", str(exc))
+        def worker() -> None:
+            try:
+                from .manager import get_doctor_report
+                report = get_doctor_report()
+                self.ui_events.put(("doctor", report))
+            except Exception as exc:
+                self.ui_events.put(("error", str(exc)))
+        threading.Thread(target=worker, daemon=True, name="doctor").start()
 
     def _open_logs(self) -> None:
         from .platform_adapter import open_path
@@ -217,6 +216,20 @@ class CourseRunApp:
                 break
         if changed:
             self._render_state(self.last_state)
+        while True:
+            try:
+                kind, payload = self.ui_events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "doctor":
+                messagebox.showinfo(
+                    "环境检测",
+                    f"BrowserSkill: {payload['version']}\n\n"
+                    f"{payload['doctor'].get('stdout') or payload['doctor'].get('stderr')}\n"
+                    f"已连接浏览器: {len(payload.get('browsers') or [])}",
+                )
+            else:
+                messagebox.showerror("环境检测失败", str(payload))
         self.root.after(100, self._process_updates)
 
     def _render_state(self, value: dict[str, Any]) -> None:
@@ -247,7 +260,14 @@ class CourseRunApp:
 
     def _refresh_logs(self) -> None:
         try:
-            content = paths().log.read_text(encoding="utf-8", errors="replace").splitlines()
+            log_path = paths().log
+            size = log_path.stat().st_size
+            if size > 128 * 1024:
+                with log_path.open("rb") as handle:
+                    handle.seek(size - 128 * 1024)
+                    content = handle.read().decode("utf-8", errors="replace").splitlines()[1:]
+            else:
+                content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
             text = "\n".join(content[-120:])
         except OSError:
             text = ""
