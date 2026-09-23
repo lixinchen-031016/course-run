@@ -42,6 +42,7 @@ AUTOPLAY_EXPRESSION = r"""
   const active = document.querySelector('.resource-item-active');
   const video = document.querySelector('video');
   const activeIndex = active ? resources.indexOf(active) : -1;
+  const firstIncomplete = activeIndex < 0 ? findNextIncomplete(0) : null;
   const nextIncomplete = activeIndex >= 0 ? findNextIncomplete(activeIndex + 1) : null;
   const nextResource = nextIncomplete?.item || null;
 
@@ -57,6 +58,18 @@ AUTOPLAY_EXPRESSION = r"""
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight
   };
+
+  if (activeIndex < 0 && firstIncomplete) {
+    const selected = firstIncomplete.item;
+    setTimeout(() => selected.click(), 120);
+    return {
+      ...base,
+      action: 'select-resource',
+      nextLesson: textOf(selected),
+      nextResourceIndex: firstIncomplete.index + 1,
+      dismissedModal: false
+    };
+  }
 
   if (active && isCompleted(active)) {
     if (nextIncomplete) {

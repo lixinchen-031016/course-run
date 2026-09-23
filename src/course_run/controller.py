@@ -71,6 +71,7 @@ class CourseController:
         self._pending_recovery_attempts = 0
         self._complete_since: float | None = None
         self._complete_confirmed = False
+        self._transient_complete_logged_at = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -253,6 +254,7 @@ class CourseController:
         self._pending_recovery_attempts = 0
         self._complete_since = None
         self._complete_confirmed = False
+        self._transient_complete_logged_at = 0.0
         self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
         self._next_recovery_at = now + 5.0
         self._update(
@@ -330,6 +332,7 @@ class CourseController:
         self._pending_recovery_attempts = 0
         self._complete_since = None
         self._complete_confirmed = False
+        self._transient_complete_logged_at = 0.0
         self._stalled_since = None
         self._update(state="stopped", action="stopped", paused=None, session_id=None, tab_id=None)
         self._log("GUI controller stopped")
@@ -391,7 +394,7 @@ class CourseController:
         previous_index = self._last_resource_index
         resource_changed = resource_index > 0 and previous_index != resource_index
         rewound = self._last_current_time > 0 and current_time + 1.0 < self._last_current_time
-        switching = action in {"next-resource", "skip-completed"}
+        switching = action in {"next-resource", "skip-completed", "select-resource"}
         tail_window = max(4.0, float(state["playbackRate"] or 1.0) * 3.0)
         natural_end = (
             not switching
@@ -500,14 +503,17 @@ class CourseController:
             if self._complete_since is not None and not self._complete_confirmed:
                 self._log(f"completion candidate cleared by action={action}")
             self._complete_since = None
+            self._transient_complete_logged_at = 0.0
         else:
             resource_count = int(state.get("resourceCount") or 0)
             if resource_count <= 0 or resource_index <= 0 or now < self._loading_until:
                 self._complete_since = None
-                self._log(
-                    f"transient complete ignored "
-                    f"(index={resource_index}, count={resource_count}, loading={now < self._loading_until})"
-                )
+                if now - self._transient_complete_logged_at >= 5.0:
+                    self._transient_complete_logged_at = now
+                    self._log(
+                        f"transient complete ignored "
+                        f"(index={resource_index}, count={resource_count}, loading={now < self._loading_until})"
+                    )
             elif self._complete_confirmed:
                 self._update(state="complete", action="complete")
             elif self._complete_since is None:

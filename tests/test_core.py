@@ -28,9 +28,10 @@ class ConfigTests(unittest.TestCase):
 
 class ExpressionTests(unittest.TestCase):
     def test_expression_has_control_actions(self):
-        for action in ["next-resource", "complete", "resume", "wait-video"]:
+        for action in ["next-resource", "select-resource", "complete", "resume", "wait-video"]:
             self.assertIn(action, AUTOPLAY_EXPRESSION)
         self.assertIn("dismissedModal", AUTOPLAY_EXPRESSION)
+        self.assertIn("activeIndex < 0 && firstIncomplete", AUTOPLAY_EXPRESSION)
         self.assertIn("须学习完课程的视频才可获得该课程视频的学时", AUTOPLAY_EXPRESSION)
 
     def test_next_video_expression_exists(self):
@@ -259,6 +260,27 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(controller._last_current_time, 2.0)
         self.assertEqual(controller._recovery_attempts, 0)
         recover_mock.assert_not_called()
+
+    def test_controller_selects_first_resource_when_active_index_is_unknown(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._complete_since = 900.0
+        controller._loading_until = 2000.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "select-resource",
+            "resourceIndex": 0,
+            "resourceCount": 31,
+            "currentTime": 0,
+            "duration": 0,
+            "paused": None,
+            "nextResourceIndex": 1,
+        }}), patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertEqual(controller._pending_resource_index, 1)
+        self.assertIsNone(controller._complete_since)
+        self.assertFalse(controller._complete_confirmed)
 
     def test_controller_ignores_transient_complete_with_empty_catalog(self):
         from unittest.mock import patch
