@@ -21,7 +21,7 @@ $downloaded = $false
 foreach ($url in $urls) {
     try {
         Write-Host "Downloading: $url"
-        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
+        & "C:\windows\system32\curl.exe" --noproxy "*" -sS -L --fail -o $zipPath $url
         $actualSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToUpperInvariant()
         if ($actualSha256 -ne $expectedSha256) {
             throw "SHA256 mismatch. Expected $expectedSha256, got $actualSha256"
