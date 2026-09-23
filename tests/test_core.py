@@ -32,6 +32,8 @@ class ExpressionTests(unittest.TestCase):
             self.assertIn(action, AUTOPLAY_EXPRESSION)
         self.assertIn("dismissedModal", AUTOPLAY_EXPRESSION)
         self.assertIn("activeIndex < 0 && firstIncomplete", AUTOPLAY_EXPRESSION)
+        self.assertIn("speed-warning", AUTOPLAY_EXPRESSION)
+        self.assertIn("speedWarning", AUTOPLAY_EXPRESSION)
         self.assertIn("须学习完课程的视频才可获得该课程视频的学时", AUTOPLAY_EXPRESSION)
 
     def test_next_video_expression_exists(self):
@@ -260,6 +262,52 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(controller._last_current_time, 2.0)
         self.assertEqual(controller._recovery_attempts, 0)
         recover_mock.assert_not_called()
+
+    def test_controller_handles_speed_warning_with_single_reload(self):
+        from unittest.mock import patch
+        from course_run.config import load_config, save_config
+        save_config(playback_rate=2.0)
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._speed_warning_since = 995.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "speed-warning",
+            "resourceIndex": 1,
+            "resourceCount": 31,
+            "currentTime": 50,
+            "duration": 100,
+            "paused": True,
+            "playbackRate": 1.0,
+        }}), patch("course_run.controller.bsk.reload") as reload_mock, \
+             patch.object(controller, "_recover_once") as recover_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        reload_mock.assert_called_once_with("session", "tab")
+        self.assertEqual(controller._pending_resource_index, 1)
+        self.assertEqual(controller._speed_warning_reloads, 1)
+        self.assertEqual(load_config().playback_rate, 1.0)
+        recover_mock.assert_not_called()
+
+    def test_controller_does_not_reload_speed_warning_twice(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._speed_warning_since = 990.0
+        controller._speed_warning_reloads = 1
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "speed-warning",
+            "resourceIndex": 1,
+            "resourceCount": 31,
+            "currentTime": 50,
+            "duration": 100,
+            "paused": True,
+            "playbackRate": 1.0,
+        }}), patch("course_run.controller.bsk.reload") as reload_mock, \
+             patch("course_run.controller.time.time", return_value=1030.0):
+            controller._poll()
+        reload_mock.assert_not_called()
 
     def test_controller_selects_first_resource_when_active_index_is_unknown(self):
         from unittest.mock import patch

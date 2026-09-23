@@ -72,6 +72,8 @@ class CourseController:
         self._complete_since: float | None = None
         self._complete_confirmed = False
         self._transient_complete_logged_at = 0.0
+        self._speed_warning_since: float | None = None
+        self._speed_warning_reloads = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -255,6 +257,8 @@ class CourseController:
         self._complete_since = None
         self._complete_confirmed = False
         self._transient_complete_logged_at = 0.0
+        self._speed_warning_since = None
+        self._speed_warning_reloads = 0
         self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
         self._next_recovery_at = now + 5.0
         self._update(
@@ -333,6 +337,8 @@ class CourseController:
         self._complete_since = None
         self._complete_confirmed = False
         self._transient_complete_logged_at = 0.0
+        self._speed_warning_since = None
+        self._speed_warning_reloads = 0
         self._stalled_since = None
         self._update(state="stopped", action="stopped", paused=None, session_id=None, tab_id=None)
         self._log("GUI controller stopped")
@@ -391,6 +397,9 @@ class CourseController:
         now = time.time()
         keep_awake = load_config().keep_browser_awake
         resource_index = state["resourceIndex"]
+        if action == "speed-warning":
+            self._handle_speed_warning(now, resource_index)
+            return
         previous_index = self._last_resource_index
         resource_changed = resource_index > 0 and previous_index != resource_index
         rewound = self._last_current_time > 0 and current_time + 1.0 < self._last_current_time
@@ -423,10 +432,14 @@ class CourseController:
             # while the new resource loads. Never compare both timelines.
             self._complete_since = None
             self._complete_confirmed = False
+            self._speed_warning_since = None
+            self._speed_warning_reloads = 0
             self._reset_progress_watchdog(0.0, None, now, grace=20.0)
         elif resource_changed:
             self._complete_since = None
             self._complete_confirmed = False
+            self._speed_warning_since = None
+            self._speed_warning_reloads = 0
             reason = ""
             if previous_index > 0:
                 reason = (
@@ -461,6 +474,10 @@ class CourseController:
             if resource_index > 0:
                 self._last_resource_index = resource_index
             self._last_progress_time = now
+            if self._speed_warning_since is not None:
+                self._log("speed warning cleared; playback resumed at normal rate")
+                self._speed_warning_since = None
+                self._speed_warning_reloads = 0
             if self._recovery_attempts and current_time > self._recovery_anchor_current + 2.0:
                 self._log("playback recovered and progress is stable")
                 self._recovery_attempts = 0
@@ -561,6 +578,33 @@ class CourseController:
             self._log(f"pending resource recovery failed: {exc}")
         self._loading_until = max(self._loading_until, now + 12.0)
         self._next_recovery_at = now + 10.0
+
+    def _handle_speed_warning(self, now: float, resource_index: int) -> None:
+        first_seen = self._speed_warning_since is None
+        if first_seen:
+            self._speed_warning_since = now
+            self._log("platform speed warning detected; forcing 1.0x playback")
+        config = load_config()
+        if float(config.playback_rate or 1.0) != 1.0:
+            save_config(config, playback_rate=1.0)
+            self._log("saved playback rate reset to 1.0x because of platform warning")
+        elapsed = now - self._speed_warning_since
+        if elapsed >= 3.0 and self._speed_warning_reloads < 1:
+            self._speed_warning_reloads = 1
+            if resource_index > 0:
+                self._pending_resource_index = resource_index
+            self._log("speed warning persists; reloading page once to clear platform state")
+            try:
+                bsk.reload(self._session_id, self._tab_id)
+            except Exception as exc:
+                self._log(f"speed warning reload failed: {exc}")
+            self._recovery_attempts = 0
+            self._stalled_since = None
+            self._loading_until = now + 25.0
+            self._next_recovery_at = now + 15.0
+        elif self._speed_warning_reloads >= 1:
+            self._next_recovery_at = now + 30.0
+        self._update(action="speed-warning", error=None)
 
     def _click_videojs_play_button(self) -> bool:
         if not self._session_id or not self._tab_id:

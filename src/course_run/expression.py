@@ -5,6 +5,13 @@ PLAYBACK_RATE_TOKEN = "__COURSE_PLAYBACK_RATE__"
 AUTOPLAY_EXPRESSION = r"""
 (async () => {
   const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const isVisible = (el) => {
+    if (!el || !el.isConnected) return false;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+      style.visibility !== 'hidden' && Number(style.opacity || 1) > 0;
+  };
 
   // Open every catalog group/section so lazily loaded resource items enter the DOM.
   const collapsedHeaders = Array.from(
@@ -58,6 +65,21 @@ AUTOPLAY_EXPRESSION = r"""
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight
   };
+
+  const speedWarning = Array.from(document.querySelectorAll('div,span,p')).some(
+    (element) => isVisible(element) && textOf(element).includes('系统检测到倍速播放')
+  );
+  if (speedWarning) {
+    if (video) {
+      try { video.playbackRate = 1.0; } catch (_) {}
+    }
+    return {
+      ...base,
+      action: 'speed-warning',
+      playbackRate: video?.playbackRate || 1.0,
+      speedWarning: true
+    };
+  }
 
   if (activeIndex < 0 && firstIncomplete) {
     const selected = firstIncomplete.item;
