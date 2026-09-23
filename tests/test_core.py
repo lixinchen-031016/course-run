@@ -260,6 +260,52 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(controller._recovery_attempts, 0)
         recover_mock.assert_not_called()
 
+    def test_controller_ignores_transient_complete_with_empty_catalog(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._owns_session = True
+        controller._loading_until = 2000.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "complete",
+            "resourceIndex": 0,
+            "resourceCount": 0,
+            "currentTime": 0,
+            "duration": 0,
+            "paused": True,
+        }}), patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertEqual(controller._session_id, "session")
+        self.assertFalse(controller._complete_confirmed)
+        self.assertIsNone(controller._complete_since)
+        self.assertNotEqual(controller.snapshot()["state"], "complete")
+
+    def test_controller_confirms_complete_without_closing_session(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        controller._owns_session = True
+        controller._last_resource_index = 3
+        controller._last_current_time = 0.0
+        controller._last_duration = 0.0
+        controller._complete_since = 993.0
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "complete",
+            "resourceIndex": 3,
+            "resourceCount": 10,
+            "currentTime": 0,
+            "duration": 100,
+            "paused": True,
+        }}), patch("course_run.controller.bsk.run") as run_mock, \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        self.assertTrue(controller._complete_confirmed)
+        self.assertEqual(controller.snapshot()["state"], "complete")
+        self.assertEqual(controller._session_id, "session")
+        self.assertFalse(any(call.args and call.args[0][:2] == ["session", "stop"] for call in run_mock.call_args_list))
+
     def test_controller_switches_when_natural_end_resets_to_zero(self):
         from unittest.mock import patch
         controller = CourseController()

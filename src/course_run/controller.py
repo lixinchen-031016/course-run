@@ -69,6 +69,8 @@ class CourseController:
         self._reload_attempts = 0
         self._pending_resource_index = 0
         self._pending_recovery_attempts = 0
+        self._complete_since: float | None = None
+        self._complete_confirmed = False
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -249,6 +251,8 @@ class CourseController:
         self._next_recovery_at = 0.0
         self._pending_resource_index = 0
         self._pending_recovery_attempts = 0
+        self._complete_since = None
+        self._complete_confirmed = False
         self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
         self._next_recovery_at = now + 5.0
         self._update(
@@ -324,6 +328,8 @@ class CourseController:
         self._reload_attempts = 0
         self._pending_resource_index = 0
         self._pending_recovery_attempts = 0
+        self._complete_since = None
+        self._complete_confirmed = False
         self._stalled_since = None
         self._update(state="stopped", action="stopped", paused=None, session_id=None, tab_id=None)
         self._log("GUI controller stopped")
@@ -343,7 +349,7 @@ class CourseController:
         duration = float(value.get("duration") or 0)
         progress = (current_time / duration * 100.0) if duration > 0 else 0.0
         state = {
-            "state": "complete" if action == "complete" else "running",
+            "state": "complete" if action == "complete" and self._complete_confirmed else "running",
             "action": action,
             "lesson": str(value.get("lesson") or ""),
             "pageTitle": str(value.get("title") or ""),
@@ -412,8 +418,12 @@ class CourseController:
         if switching:
             # The DOM can keep reporting the previous video for a short time
             # while the new resource loads. Never compare both timelines.
+            self._complete_since = None
+            self._complete_confirmed = False
             self._reset_progress_watchdog(0.0, None, now, grace=20.0)
         elif resource_changed:
+            self._complete_since = None
+            self._complete_confirmed = False
             reason = ""
             if previous_index > 0:
                 reason = (
@@ -486,19 +496,30 @@ class CourseController:
         elif action == "loading-catalog":
             self._stalled_since = None
 
-        if action == "complete":
-            self._log("course complete")
-            if self._owns_session:
-                try:
-                    bsk.run(["session", "stop", self._session_id], timeout=25)
-                except Exception:
-                    pass
-            self._session_id = None
-            self._tab_id = None
-            self._owns_session = False
-            self._pending_resource_index = 0
-            self._pending_recovery_attempts = 0
-            self._update(state="complete", action="complete")
+        if action != "complete":
+            if self._complete_since is not None and not self._complete_confirmed:
+                self._log(f"completion candidate cleared by action={action}")
+            self._complete_since = None
+        else:
+            resource_count = int(state.get("resourceCount") or 0)
+            if resource_count <= 0 or resource_index <= 0 or now < self._loading_until:
+                self._complete_since = None
+                self._log(
+                    f"transient complete ignored "
+                    f"(index={resource_index}, count={resource_count}, loading={now < self._loading_until})"
+                )
+            elif self._complete_confirmed:
+                self._update(state="complete", action="complete")
+            elif self._complete_since is None:
+                self._complete_since = now
+                self._log(
+                    f"course complete candidate "
+                    f"(index={resource_index}/{resource_count}); waiting for confirmation"
+                )
+            elif now - self._complete_since >= 6.0:
+                self._complete_confirmed = True
+                self._log("course complete confirmed; keeping browser session open")
+                self._update(state="complete", action="complete")
 
     def _recover_pending_resource(self) -> None:
         pending = self._pending_resource_index

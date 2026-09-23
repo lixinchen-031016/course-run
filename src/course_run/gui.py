@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 import queue
 import threading
+import traceback
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Any
@@ -46,6 +47,7 @@ class CourseRunApp:
         self._build()
         self._load_config()
         self._bind_shortcuts()
+        self.root.report_callback_exception = self._report_callback_exception
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(120, self._process_updates)
         self.root.after(500, self._refresh_logs)
@@ -279,6 +281,19 @@ class CourseRunApp:
             self.logs.see("end")
             self.logs.configure(state="disabled")
         self.root.after(800, self._refresh_logs)
+
+    def _report_callback_exception(self, exc_type: type[BaseException], exc: BaseException, tb: object) -> None:
+        try:
+            path = paths().root / "crash.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                traceback.print_exception(exc_type, exc, tb, file=handle)
+        except Exception:
+            pass
+        try:
+            messagebox.showerror("CourseRun 错误", f"{exc_type.__name__}: {exc}")
+        except Exception:
+            pass
 
     def _on_close(self) -> None:
         state = self.controller.snapshot()
