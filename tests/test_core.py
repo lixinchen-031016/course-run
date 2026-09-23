@@ -263,6 +263,27 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(controller._recovery_attempts, 0)
         recover_mock.assert_not_called()
 
+    def test_controller_keeps_hidden_browser_visible(self):
+        from unittest.mock import patch
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "playing",
+            "resourceIndex": 1,
+            "resourceCount": 31,
+            "currentTime": 10,
+            "duration": 100,
+            "paused": False,
+            "hidden": True,
+            "visibility": "hidden",
+        }}), patch("course_run.controller.keep_browser_visible") as keep_mock, \
+             patch("course_run.controller.system_name", return_value="windows"), \
+             patch("course_run.controller.time.time", return_value=1000.0):
+            controller._poll()
+        keep_mock.assert_called_once()
+        self.assertEqual(controller._next_browser_awake_at, 1003.0)
+
     def test_controller_handles_speed_warning_with_single_reload(self):
         from unittest.mock import patch
         from course_run.config import load_config, save_config

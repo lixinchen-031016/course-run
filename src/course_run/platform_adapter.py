@@ -162,7 +162,7 @@ def _windows_process_name(pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
-def _restore_windows_browser(preferred: str, title_hint: str | None = None) -> bool:
+def _find_windows_browser_window(preferred: str, title_hint: str | None = None) -> int | None:
     user32 = ctypes.windll.user32
     candidates: list[tuple[int, int, str]] = []
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
@@ -196,17 +196,69 @@ def _restore_windows_browser(preferred: str, title_hint: str | None = None) -> b
     try:
         user32.EnumWindows(callback_type(callback), 0)
     except Exception:
-        return False
+        return None
     if not candidates:
-        return False
+        return None
     candidates.sort(key=lambda item: item[0], reverse=True)
-    hwnd = candidates[0][1]
+    return candidates[0][1]
+
+
+def _set_windows_browser_topmost(hwnd: int, topmost: bool) -> bool:
+    user32 = ctypes.windll.user32
+    try:
+        user32.SetWindowPos.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowPos.restype = ctypes.c_bool
+        insert_after = ctypes.c_void_p(-1 if topmost else -2)
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x0040  # NOSIZE | NOMOVE | NOACTIVATE | SHOWWINDOW
+        return bool(user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags))
+    except Exception:
+        return False
+
+
+def _restore_windows_browser(preferred: str, title_hint: str | None = None) -> bool:
+    user32 = ctypes.windll.user32
+    hwnd = _find_windows_browser_window(preferred, title_hint)
+    if hwnd is None:
+        return False
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     user32.BringWindowToTop(hwnd)
     user32.SetForegroundWindow(hwnd)
     return True
 
+
+def keep_browser_visible(
+    preferred: str = "Microsoft Edge",
+    title_hint: str | None = None,
+    topmost: bool = True,
+) -> bool:
+    """Keep a Chromium window visible without activating it on Windows."""
+    if system_name() != "windows":
+        return activate_browser(preferred, title_hint)
+    user32 = ctypes.windll.user32
+    hwnd = _find_windows_browser_window(preferred, title_hint)
+    if hwnd is None:
+        return False
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    return _set_windows_browser_topmost(hwnd, topmost)
+
+
+def release_browser_visible(preferred: str = "Microsoft Edge", title_hint: str | None = None) -> bool:
+    if system_name() != "windows":
+        return True
+    hwnd = _find_windows_browser_window(preferred, title_hint)
+    if hwnd is None:
+        return False
+    return _set_windows_browser_topmost(hwnd, False)
 
 def activate_browser(preferred: str = "Microsoft Edge", title_hint: str | None = None) -> bool:
     """Best-effort activation of the browser that owns the Agent Window."""

@@ -92,7 +92,7 @@ class CourseRunApp:
         ttk.Label(form, text="播放速度").grid(row=2, column=2, sticky="e", padx=(12, 8), pady=6)
         ttk.Combobox(form, textvariable=self.playback_rate, values=(0.5, 1.0, 1.25, 1.5, 2.0), state="readonly", width=10).grid(row=2, column=3, sticky="w", pady=6)
         ttk.Checkbutton(form, text="恢复上次视频和播放位置", variable=self.resume_last).grid(row=3, column=1, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(form, text="浏览器最小化时自动恢复", variable=self.keep_browser_awake).grid(row=3, column=2, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(form, text="保持浏览器前台并防止后台暂停", variable=self.keep_browser_awake).grid(row=3, column=2, sticky="w", pady=(6, 0))
         ttk.Checkbutton(form, text="打开程序后自动开始", variable=self.auto_start).grid(row=3, column=3, sticky="w", pady=(6, 0))
 
         actions = ttk.Frame(main)

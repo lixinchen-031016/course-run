@@ -16,7 +16,12 @@ from .expression import (
     render_expression,
     render_resume_expression,
 )
-from .platform_adapter import activate_browser
+from .platform_adapter import (
+    activate_browser,
+    keep_browser_visible,
+    release_browser_visible,
+    system_name,
+)
 
 
 def utc_now() -> str:
@@ -74,6 +79,8 @@ class CourseController:
         self._transient_complete_logged_at = 0.0
         self._speed_warning_since: float | None = None
         self._speed_warning_reloads = 0
+        self._next_browser_awake_at = 0.0
+        self._last_browser_hidden_log_at = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -259,6 +266,8 @@ class CourseController:
         self._transient_complete_logged_at = 0.0
         self._speed_warning_since = None
         self._speed_warning_reloads = 0
+        self._next_browser_awake_at = 0.0
+        self._last_browser_hidden_log_at = 0.0
         self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
         self._next_recovery_at = now + 5.0
         self._update(
@@ -339,7 +348,11 @@ class CourseController:
         self._transient_complete_logged_at = 0.0
         self._speed_warning_since = None
         self._speed_warning_reloads = 0
+        self._next_browser_awake_at = 0.0
+        self._last_browser_hidden_log_at = 0.0
         self._stalled_since = None
+        state = self.snapshot()
+        release_browser_visible(title_hint=str(state.get("pageTitle") or state.get("lesson") or ""))
         self._update(state="stopped", action="stopped", paused=None, session_id=None, tab_id=None)
         self._log("GUI controller stopped")
 
@@ -397,6 +410,19 @@ class CourseController:
         now = time.time()
         keep_awake = load_config().keep_browser_awake
         resource_index = state["resourceIndex"]
+        if keep_awake and now >= self._next_browser_awake_at:
+            hidden = bool(value.get("hidden"))
+            visibility = str(value.get("visibility") or "visible")
+            needs_visible = hidden or visibility != "visible"
+            if system_name() == "windows":
+                keep_browser_visible(title_hint=str(state.get("pageTitle") or state.get("lesson") or ""))
+                self._next_browser_awake_at = now + 3.0
+            elif needs_visible:
+                keep_browser_visible(title_hint=str(state.get("pageTitle") or state.get("lesson") or ""))
+                self._next_browser_awake_at = now + 10.0
+            if needs_visible and now - self._last_browser_hidden_log_at >= 10.0:
+                self._last_browser_hidden_log_at = now
+                self._log(f"browser page is not visible ({visibility}); restoring browser window")
         if action == "speed-warning":
             self._handle_speed_warning(now, resource_index)
             return
