@@ -9,10 +9,10 @@ from typing import Any, Callable
 from . import bsk
 from .config import Config, load_config, paths, read_status, save_config, write_status
 from .expression import (
-    NEXT_VIDEO_EXPRESSION,
     PLAYBACK_RECOVERY_EXPRESSION,
     PLAYBACK_TOGGLE_EXPRESSION,
-    PREVIOUS_VIDEO_EXPRESSION,
+    next_video_expression,
+    previous_video_expression,
     render_expression,
     render_resume_expression,
 )
@@ -313,7 +313,7 @@ class CourseController:
         self._reset_progress_watchdog(current_time, index, now, grace=20.0)
         self._next_recovery_at = now + 2.0
         try:
-            result = self._evaluate(render_resume_expression(index, current_time), timeout=35, retries=3)
+            result = self._evaluate(render_resume_expression(index, current_time, load_config().course_url), timeout=35, retries=3)
             value = result.get("value") or {}
             self._log(
                 f"resume saved position index={index} saved={current_time:.2f} "
@@ -364,7 +364,7 @@ class CourseController:
         if not self._session_id or not self._tab_id:
             return
         config = load_config()
-        payload = self._evaluate(render_expression(config.playback_rate), timeout=25)
+        payload = self._evaluate(render_expression(config.playback_rate, config.course_url), timeout=25)
         value = payload.get("value") or {}
         action = str(value.get("action") or "unknown")
         current_time = float(value.get("currentTime") or 0)
@@ -589,7 +589,7 @@ class CourseController:
             pass
         activate_browser(title_hint=str(state.get("pageTitle") or state.get("lesson") or ""))
         try:
-            payload = self._evaluate(render_resume_expression(pending, 0.0), timeout=35, retries=3)
+            payload = self._evaluate(render_resume_expression(pending, 0.0, load_config().course_url), timeout=35, retries=3)
             result = payload.get("value") or {}
             self._log(
                 "pending resource recovery result: "
@@ -734,7 +734,8 @@ class CourseController:
     def _command_switch(self, direction: str) -> None:
         if not self._session_id:
             raise RuntimeError("课程尚未启动")
-        expression = NEXT_VIDEO_EXPRESSION if direction == "next" else PREVIOUS_VIDEO_EXPRESSION
+        course_url = load_config().course_url
+        expression = next_video_expression(course_url) if direction == "next" else previous_video_expression(course_url)
         payload = self._evaluate(expression, timeout=20)
         value = payload.get("value") or {}
         if not value.get("ok"):

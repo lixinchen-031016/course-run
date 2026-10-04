@@ -7,7 +7,18 @@ import unittest
 from pathlib import Path
 
 from course_run.config import Config, paths
-from course_run.expression import AUTOPLAY_EXPRESSION, NEXT_VIDEO_EXPRESSION, PLAYBACK_RECOVERY_EXPRESSION, PLAYBACK_TOGGLE_EXPRESSION, PREVIOUS_VIDEO_EXPRESSION, render_expression, render_resume_expression
+from course_run.expression import (
+    AUTOPLAY_EXPRESSION,
+    CDWORK_AUTOPLAY_EXPRESSION,
+    CDWORK_NEXT_VIDEO_EXPRESSION,
+    CDWORK_PREVIOUS_VIDEO_EXPRESSION,
+    NEXT_VIDEO_EXPRESSION,
+    PLAYBACK_RECOVERY_EXPRESSION,
+    PLAYBACK_TOGGLE_EXPRESSION,
+    PREVIOUS_VIDEO_EXPRESSION,
+    render_expression,
+    render_resume_expression,
+)
 from course_run.platform_adapter import activate_browser, system_name
 from course_run.controller import CourseController
 from course_run.manager import next_video
@@ -67,6 +78,13 @@ class ExpressionTests(unittest.TestCase):
         expression = render_expression(1.5)
         self.assertIn("Number('1.5')", expression)
         self.assertNotIn("__COURSE_PLAYBACK_RATE__", expression)
+
+    def test_cdwork_expression_selection_and_controls(self):
+        expression = render_expression(1.0, "https://www.cdwork.cn/pages/train/play")
+        self.assertEqual(expression, CDWORK_AUTOPLAY_EXPRESSION.replace("__COURSE_PLAYBACK_RATE__", "1.0"))
+        self.assertIn("document.querySelectorAll('.ci')", expression)
+        self.assertIn("是否继续上次播放", expression)
+        self.assertIn("rgb(0, 119, 199)", expression)
 
     def test_playback_recovery_expression_never_clicks_video(self):
         self.assertIn("await video.play()", PLAYBACK_RECOVERY_EXPRESSION)
@@ -159,6 +177,8 @@ class WorkerTests(unittest.TestCase):
 
     def test_controller_switch_commands_use_correct_expression(self):
         from unittest.mock import patch
+        from course_run.config import save_config
+        save_config(course_url="")
         controller = CourseController()
         controller._session_id = "session"
         controller._tab_id = "tab"
@@ -176,6 +196,22 @@ class WorkerTests(unittest.TestCase):
             controller._command_switch("previous")
             self.assertEqual(evaluate_mock.call_args.args[0], PREVIOUS_VIDEO_EXPRESSION)
             self.assertEqual(controller.snapshot()["action"], "switching-previous")
+
+    def test_controller_switch_uses_cdwork_expressions(self):
+        from unittest.mock import patch
+        from course_run.config import save_config
+        save_config(course_url="https://www.cdwork.cn/pages/train/play")
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "A", "to": "B"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"):
+            controller._command_switch("next")
+            self.assertEqual(evaluate_mock.call_args.args[0], CDWORK_NEXT_VIDEO_EXPRESSION)
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "B", "to": "A"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"):
+            controller._command_switch("previous")
+            self.assertEqual(evaluate_mock.call_args.args[0], CDWORK_PREVIOUS_VIDEO_EXPRESSION)
 
     def test_controller_resume_uses_saved_position(self):
         from unittest.mock import patch

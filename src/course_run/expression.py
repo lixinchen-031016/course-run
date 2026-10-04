@@ -221,8 +221,357 @@ AUTOPLAY_EXPRESSION = r"""
 """
 
 
-def render_expression(playback_rate: float = 1.0) -> str:
-    return AUTOPLAY_EXPRESSION.replace(PLAYBACK_RATE_TOKEN, str(playback_rate))
+
+CDWORK_AUTOPLAY_EXPRESSION = r"""
+(async () => {
+  const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const isVisible = (el) => {
+    if (!el || !el.isConnected) return false;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+      style.visibility !== 'hidden' && Number(style.opacity || 1) > 0;
+  };
+  const statusOf = (item) => {
+    const spans = Array.from(item?.querySelectorAll(':scope > span') || []);
+    const status = spans.map(textOf).find((value) => /未完成|未尝试|已学完|已完成播放|播放完成|已完成/.test(value));
+    return status || '';
+  };
+  const isCompleted = (item) => /已学完|已完成播放|播放完成|已完成/.test(statusOf(item));
+  const titleOf = (item) => {
+    const title = Array.from(item?.querySelectorAll(':scope > span') || [])
+      .map(textOf)
+      .find((value) => /^第\d+节/.test(value));
+    return title || textOf(item);
+  };
+  const clickResource = (item) => {
+    let parent = item?.parentElement;
+    while (parent) {
+      const style = getComputedStyle(parent);
+      const previous = parent.previousElementSibling;
+      if (style.display === 'none' && previous?.classList?.contains('ti')) {
+        previous.click();
+      }
+      parent = parent.parentElement;
+    }
+    item?.click();
+  };
+
+  const headers = Array.from(document.querySelectorAll('.ti'));
+  let openedCatalogSections = 0;
+  for (const header of headers) {
+    const body = header.nextElementSibling;
+    if (body && getComputedStyle(body).display === 'none') {
+      header.click();
+      openedCatalogSections += 1;
+    }
+  }
+
+  const resources = Array.from(document.querySelectorAll('.ci'));
+  const findNextIncomplete = (start) => {
+    for (let index = Math.max(0, start); index < resources.length; index += 1) {
+      if (!isCompleted(resources[index])) return { item: resources[index], index };
+    }
+    return null;
+  };
+  const active = resources.find((item) => {
+    const title = Array.from(item.querySelectorAll(':scope > span'))
+      .find((span) => /^第\d+节/.test(textOf(span)));
+    return title && getComputedStyle(title).color === 'rgb(0, 119, 199)';
+  }) || null;
+  const activeIndex = active ? resources.indexOf(active) : -1;
+  const firstIncomplete = activeIndex < 0 ? findNextIncomplete(0) : null;
+  const nextIncomplete = activeIndex >= 0 ? findNextIncomplete(activeIndex + 1) : null;
+  const nextResource = nextIncomplete?.item || null;
+  const video = document.querySelector('video.vjs-tech') || document.querySelector('video');
+
+  const base = {
+    site: 'cdwork',
+    lesson: titleOf(active),
+    title: document.title,
+    url: location.href,
+    resourceIndex: activeIndex >= 0 ? activeIndex + 1 : 0,
+    resourceCount: resources.length,
+    openedCatalogSections,
+    hidden: document.hidden,
+    visibility: document.visibilityState,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  };
+
+  let dismissedModal = false;
+  const continueModal = Array.from(document.querySelectorAll('div')).find(
+    (element) => isVisible(element) && textOf(element).includes('是否继续上次播放') &&
+      element.querySelectorAll('button').length > 0
+  );
+  if (continueModal) {
+    const confirm = Array.from(continueModal.querySelectorAll('button')).find(
+      (button) => textOf(button).replace(/[（(]\d+[）)]/g, '').trim() === '确定'
+    );
+    if (confirm) {
+      confirm.click();
+      dismissedModal = true;
+    }
+  }
+
+  const speedWarning = Array.from(document.querySelectorAll('div,span,p')).some(
+    (element) => isVisible(element) && textOf(element).includes('系统检测到倍速播放')
+  );
+  if (speedWarning) {
+    if (video) {
+      try { video.playbackRate = 1.0; } catch (_) {}
+    }
+    return {
+      ...base,
+      action: 'speed-warning',
+      playbackRate: video?.playbackRate || 1.0,
+      speedWarning: true
+    };
+  }
+
+  if (activeIndex < 0 && firstIncomplete) {
+    clickResource(firstIncomplete.item);
+    return {
+      ...base,
+      action: 'select-resource',
+      nextLesson: titleOf(firstIncomplete.item),
+      nextResourceIndex: firstIncomplete.index + 1,
+      dismissedModal
+    };
+  }
+
+  if (active && isCompleted(active)) {
+    if (nextIncomplete) {
+      clickResource(nextIncomplete.item);
+      return {
+        ...base,
+        action: 'skip-completed',
+        lesson: titleOf(active),
+        nextLesson: titleOf(nextIncomplete.item),
+        nextResourceIndex: nextIncomplete.index + 1,
+        dismissedModal
+      };
+    }
+    return { ...base, action: 'complete', dismissedModal };
+  }
+
+  if (!video) {
+    return { ...base, action: 'wait-video', paused: null, currentTime: null, duration: null, dismissedModal };
+  }
+
+  const desiredPlaybackRate = Number('__COURSE_PLAYBACK_RATE__');
+  if (Number.isFinite(desiredPlaybackRate) && video.playbackRate !== desiredPlaybackRate) {
+    video.playbackRate = desiredPlaybackRate;
+  }
+
+  const state = {
+    ...base,
+    paused: video.paused,
+    ended: video.ended,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+    duration: Number.isFinite(video.duration) ? video.duration : 0,
+    playbackRate: video.playbackRate,
+    readyState: video.readyState
+  };
+  const nearEnd = video.ended || (
+    Number.isFinite(video.duration) &&
+    video.duration > 0 &&
+    video.currentTime >= video.duration - 0.35
+  );
+
+  if (nearEnd && active) {
+    if (nextResource) {
+      clickResource(nextResource);
+      return {
+        ...state,
+        action: 'next-resource',
+        nextLesson: titleOf(nextResource),
+        nextResourceIndex: resources.indexOf(nextResource) + 1,
+        dismissedModal
+      };
+    }
+    return { ...state, action: 'complete', dismissedModal };
+  }
+
+  if (video.paused && video.readyState >= 2) {
+    let playError = null;
+    try {
+      await video.play();
+    } catch (error) {
+      playError = { name: error?.name || 'Error', message: error?.message || String(error) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return {
+      ...state,
+      paused: video.paused,
+      currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+      playError,
+      action: video.paused ? 'needs-user-gesture' : 'resume',
+      dismissedModal
+    };
+  }
+
+  return { ...state, action: video.paused ? 'wait-player' : 'playing', dismissedModal };
+})()
+"""
+
+CDWORK_NEXT_VIDEO_EXPRESSION = r"""
+(() => {
+  const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const statusOf = (item) => {
+    const spans = Array.from(item?.querySelectorAll(':scope > span') || []);
+    return spans.map(textOf).find((value) => /未完成|未尝试|已学完|已完成播放|播放完成|已完成/.test(value)) || '';
+  };
+  const isCompleted = (item) => /已学完|已完成播放|播放完成|已完成/.test(statusOf(item));
+  const titleOf = (item) => Array.from(item?.querySelectorAll(':scope > span') || [])
+    .map(textOf).find((value) => /^第\d+节/.test(value)) || textOf(item);
+  const clickResource = (item) => item?.click();
+  const headers = Array.from(document.querySelectorAll('.ti'));
+  for (const header of headers) {
+    const body = header.nextElementSibling;
+    if (body && getComputedStyle(body).display === 'none') header.click();
+  }
+  const resources = Array.from(document.querySelectorAll('.ci'));
+  const active = resources.find((item) => {
+    const title = Array.from(item.querySelectorAll(':scope > span')).find((span) => /^第\d+节/.test(textOf(span)));
+    return title && getComputedStyle(title).color === 'rgb(0, 119, 199)';
+  }) || null;
+  const index = active ? resources.indexOf(active) : -1;
+  let targetIndex = index < 0 ? 0 : index + 1;
+  while (targetIndex < resources.length && isCompleted(resources[targetIndex])) targetIndex += 1;
+  if (targetIndex >= resources.length) {
+    return { ok: false, reason: 'at-end', from: titleOf(active), index: index + 1, count: resources.length };
+  }
+  const target = resources[targetIndex];
+  clickResource(target);
+  return {
+    ok: true,
+    site: 'cdwork',
+    from: titleOf(active),
+    to: titleOf(target),
+    index: index + 1,
+    nextIndex: targetIndex + 1,
+    skippedCompleted: targetIndex > index + 1,
+    count: resources.length
+  };
+})()
+"""
+
+CDWORK_PREVIOUS_VIDEO_EXPRESSION = r"""
+(() => {
+  const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const titleOf = (item) => Array.from(item?.querySelectorAll(':scope > span') || [])
+    .map(textOf).find((value) => /^第\d+节/.test(value)) || textOf(item);
+  const resources = Array.from(document.querySelectorAll('.ci'));
+  const active = resources.find((item) => {
+    const title = Array.from(item.querySelectorAll(':scope > span')).find((span) => /^第\d+节/.test(textOf(span)));
+    return title && getComputedStyle(title).color === 'rgb(0, 119, 199)';
+  }) || null;
+  const index = active ? resources.indexOf(active) : -1;
+  if (index < 0) return { ok: false, reason: 'no-active', count: resources.length };
+  if (index <= 0) return { ok: false, reason: 'at-start', from: titleOf(active), index: index + 1, count: resources.length };
+  const target = resources[index - 1];
+  target.click();
+  return { ok: true, site: 'cdwork', from: titleOf(active), to: titleOf(target), index: index + 1, previousIndex: index, count: resources.length };
+})()
+"""
+
+CDWORK_RESUME_VIDEO_EXPRESSION = r"""
+(async () => {
+  const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const titleOf = (item) => Array.from(item?.querySelectorAll(':scope > span') || [])
+    .map(textOf).find((value) => /^第\d+节/.test(value)) || textOf(item);
+  const statusOf = (item) => {
+    const spans = Array.from(item?.querySelectorAll(':scope > span') || []);
+    return spans.map(textOf).find((value) => /未完成|未尝试|已学完|已完成播放|播放完成|已完成/.test(value)) || '';
+  };
+  const isCompleted = (item) => /已学完|已完成播放|播放完成|已完成/.test(statusOf(item));
+  const headers = Array.from(document.querySelectorAll('.ti'));
+  for (const header of headers) {
+    const body = header.nextElementSibling;
+    if (body && getComputedStyle(body).display === 'none') header.click();
+  }
+  const resources = Array.from(document.querySelectorAll('.ci'));
+  let targetIndex = Math.max(0, Number('__RESUME_INDEX__') - 1);
+  const savedTime = Math.max(0, Number('__RESUME_TIME__') || 0);
+  const active = resources.find((item) => {
+    const title = Array.from(item.querySelectorAll(':scope > span')).find((span) => /^第\d+节/.test(textOf(span)));
+    return title && getComputedStyle(title).color === 'rgb(0, 119, 199)';
+  }) || null;
+  let currentIndex = active ? resources.indexOf(active) : -1;
+
+  if (targetIndex >= resources.length) {
+    return { ok: false, reason: 'not-found', targetIndex: targetIndex + 1, count: resources.length };
+  }
+  if (isCompleted(resources[targetIndex])) {
+    while (targetIndex < resources.length && isCompleted(resources[targetIndex])) targetIndex += 1;
+    if (targetIndex >= resources.length) {
+      return { ok: true, reason: 'all-completed', targetIndex, count: resources.length, changed: false };
+    }
+  }
+  if (currentIndex > targetIndex) {
+    return {
+      ok: true,
+      reason: 'platform-ahead',
+      targetIndex: targetIndex + 1,
+      currentIndex: currentIndex + 1,
+      lesson: titleOf(resources[currentIndex]),
+      count: resources.length,
+      changed: false
+    };
+  }
+  if (currentIndex !== targetIndex) {
+    resources[targetIndex].click();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+
+  let video = null;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    video = document.querySelector('video.vjs-tech') || document.querySelector('video');
+    if (video && video.readyState >= 1 && Number.isFinite(video.duration)) break;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  if (!video) return { ok: false, reason: 'wait-video', targetIndex: targetIndex + 1 };
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  let targetTime = savedTime;
+  if (duration > 0) {
+    targetTime = Math.min(targetTime, duration);
+    if (savedTime >= duration - 3) targetTime = 0;
+  }
+  if (targetTime > 0 && video.currentTime < targetTime - 1) {
+    try { video.currentTime = targetTime; } catch (_) {}
+  }
+  return {
+    ok: true,
+    site: 'cdwork',
+    targetIndex: targetIndex + 1,
+    lesson: titleOf(resources[targetIndex]),
+    savedTime,
+    targetTime,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+    duration,
+    changed: currentIndex !== targetIndex
+  };
+})()
+"""
+
+
+def is_cdwork_course(course_url: str) -> bool:
+    return "cdwork.cn" in str(course_url or "").lower()
+
+
+def render_expression(playback_rate: float = 1.0, course_url: str = "") -> str:
+    template = CDWORK_AUTOPLAY_EXPRESSION if is_cdwork_course(course_url) else AUTOPLAY_EXPRESSION
+    return template.replace(PLAYBACK_RATE_TOKEN, str(playback_rate))
+
+
+def next_video_expression(course_url: str) -> str:
+    return CDWORK_NEXT_VIDEO_EXPRESSION if is_cdwork_course(course_url) else NEXT_VIDEO_EXPRESSION
+
+
+def previous_video_expression(course_url: str) -> str:
+    return CDWORK_PREVIOUS_VIDEO_EXPRESSION if is_cdwork_course(course_url) else PREVIOUS_VIDEO_EXPRESSION
+
 
 NEXT_VIDEO_EXPRESSION = r"""
 (() => {
@@ -548,9 +897,10 @@ RESUME_VIDEO_EXPRESSION = r"""
 """
 
 
-def render_resume_expression(resource_index: int, current_time: float) -> str:
+def render_resume_expression(resource_index: int, current_time: float, course_url: str = "") -> str:
+    template = CDWORK_RESUME_VIDEO_EXPRESSION if is_cdwork_course(course_url) else RESUME_VIDEO_EXPRESSION
     return (
-        RESUME_VIDEO_EXPRESSION
+        template
         .replace("__RESUME_INDEX__", str(max(1, int(resource_index or 1))))
         .replace("__RESUME_TIME__", str(max(0.0, float(current_time or 0))))
     )
