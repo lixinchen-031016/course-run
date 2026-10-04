@@ -13,9 +13,14 @@ from course_run.expression import (
     CDWORK_NEXT_VIDEO_EXPRESSION,
     CDWORK_PREVIOUS_VIDEO_EXPRESSION,
     NEXT_VIDEO_EXPRESSION,
+    WEBTRN_AUTOPLAY_EXPRESSION,
+    WEBTRN_NEXT_VIDEO_EXPRESSION,
+    WEBTRN_PREVIOUS_VIDEO_EXPRESSION,
     PLAYBACK_RECOVERY_EXPRESSION,
     PLAYBACK_TOGGLE_EXPRESSION,
     PREVIOUS_VIDEO_EXPRESSION,
+    playback_recovery_expression,
+    playback_toggle_expression,
     render_expression,
     render_resume_expression,
 )
@@ -85,6 +90,16 @@ class ExpressionTests(unittest.TestCase):
         self.assertIn("document.querySelectorAll('.ci')", expression)
         self.assertIn("是否继续上次播放", expression)
         self.assertIn("rgb(0, 119, 199)", expression)
+
+    def test_webtrn_expression_selection_and_controls(self):
+        url = "https://scszj.webtrn.cn/cms/classDetailNew.htm?classId=test"
+        expression = render_expression(1.0, url)
+        self.assertEqual(expression, WEBTRN_AUTOPLAY_EXPRESSION.replace("__COURSE_PLAYBACK_RATE__", "1.0"))
+        self.assertIn("classCourseDetailNew.htm", expression)
+        self.assertIn(".s_point[itemtype=\"video\"]", expression)
+        self.assertIn("course-complete", expression)
+        self.assertEqual(playback_recovery_expression(url), __import__("course_run.expression", fromlist=["WEBTRN_PLAYBACK_RECOVERY_EXPRESSION"]).WEBTRN_PLAYBACK_RECOVERY_EXPRESSION)
+        self.assertIn("player_pause", playback_toggle_expression(url))
 
     def test_playback_recovery_expression_never_clicks_video(self):
         self.assertIn("await video.play()", PLAYBACK_RECOVERY_EXPRESSION)
@@ -196,6 +211,44 @@ class WorkerTests(unittest.TestCase):
             controller._command_switch("previous")
             self.assertEqual(evaluate_mock.call_args.args[0], PREVIOUS_VIDEO_EXPRESSION)
             self.assertEqual(controller.snapshot()["action"], "switching-previous")
+
+    def test_controller_switch_uses_webtrn_expressions(self):
+        from unittest.mock import patch
+        from course_run.config import save_config
+        save_config(course_url="https://scszj.webtrn.cn/cms/classDetailNew.htm?classId=test")
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "A", "to": "B"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"):
+            controller._command_switch("next")
+            self.assertEqual(evaluate_mock.call_args.args[0], WEBTRN_NEXT_VIDEO_EXPRESSION)
+        with patch.object(controller, "_evaluate", return_value={"value": {"ok": True, "from": "B", "to": "A"}}) as evaluate_mock, \
+             patch.object(controller, "_wait_and_poll"):
+            controller._command_switch("previous")
+            self.assertEqual(evaluate_mock.call_args.args[0], WEBTRN_PREVIOUS_VIDEO_EXPRESSION)
+
+    def test_controller_returns_to_class_list_after_webtrn_course(self):
+        from unittest.mock import patch
+        from course_run.config import save_config
+        class_url = "https://scszj.webtrn.cn/cms/classDetailNew.htm?classId=test"
+        save_config(course_url=class_url, playback_rate=1.0)
+        controller = CourseController()
+        controller._session_id = "session"
+        controller._tab_id = "tab"
+        with patch.object(controller, "_evaluate", return_value={"value": {
+            "action": "course-complete",
+            "resourceIndex": 32,
+            "resourceCount": 32,
+            "currentTime": 100,
+            "duration": 100,
+            "paused": True,
+        }}), patch("course_run.controller.bsk.run") as run_mock:
+            controller._poll()
+        run_mock.assert_called_once()
+        self.assertEqual(run_mock.call_args.args[0][0], "navigate")
+        self.assertEqual(run_mock.call_args.args[0][1], class_url)
+        self.assertEqual(controller.snapshot()["action"], "open-course")
 
     def test_controller_switch_uses_cdwork_expressions(self):
         from unittest.mock import patch

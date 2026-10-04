@@ -9,9 +9,9 @@ from typing import Any, Callable
 from . import bsk
 from .config import Config, load_config, paths, read_status, save_config, write_status
 from .expression import (
-    PLAYBACK_RECOVERY_EXPRESSION,
-    PLAYBACK_TOGGLE_EXPRESSION,
     next_video_expression,
+    playback_recovery_expression,
+    playback_toggle_expression,
     previous_video_expression,
     render_expression,
     render_resume_expression,
@@ -410,6 +410,26 @@ class CourseController:
         now = time.time()
         keep_awake = load_config().keep_browser_awake
         resource_index = state["resourceIndex"]
+        if action == "course-complete":
+            config = load_config()
+            self._log("course complete; returning to class course list")
+            if "classDetailNew.htm" in config.course_url:
+                try:
+                    bsk.run([
+                        "navigate", config.course_url,
+                        "--session", self._session_id,
+                        "--tab-id", self._tab_id,
+                        "--json",
+                    ], timeout=45)
+                except Exception as exc:
+                    self._log(f"return to class list failed: {exc}")
+                self._complete_since = None
+                self._complete_confirmed = False
+                self._pending_resource_index = 0
+                self._pending_recovery_attempts = 0
+                self._reset_progress_watchdog(0.0, 0, now, grace=20.0)
+                self._update(action="open-course", error=None)
+            return
         if keep_awake and now >= self._next_browser_awake_at:
             hidden = bool(value.get("hidden"))
             visibility = str(value.get("visibility") or "visible")
@@ -688,7 +708,7 @@ class CourseController:
 
         try:
             if attempt == 1:
-                payload = self._evaluate(PLAYBACK_RECOVERY_EXPRESSION, timeout=20, retries=3)
+                payload = self._evaluate(playback_recovery_expression(load_config().course_url), timeout=20, retries=3)
                 value = payload.get("value") or {}
                 self._log(
                     "gentle recovery result: "
@@ -707,7 +727,7 @@ class CourseController:
                     return
             elif attempt == 2:
                 if not self._click_videojs_play_button():
-                    self._evaluate(PLAYBACK_RECOVERY_EXPRESSION, timeout=20, retries=2)
+                    self._evaluate(playback_recovery_expression(load_config().course_url), timeout=20, retries=2)
             elif reload_once():
                 return
             else:
@@ -724,7 +744,7 @@ class CourseController:
     def _command_toggle(self) -> None:
         if not self._session_id:
             raise RuntimeError("课程尚未启动")
-        payload = self._evaluate(PLAYBACK_TOGGLE_EXPRESSION, timeout=20)
+        payload = self._evaluate(playback_toggle_expression(load_config().course_url), timeout=20)
         value = payload.get("value") or {}
         if value.get("reason") == "blocked":
             self._recovery_attempts = 0

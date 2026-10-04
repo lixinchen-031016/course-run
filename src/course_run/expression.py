@@ -556,21 +556,287 @@ CDWORK_RESUME_VIDEO_EXPRESSION = r"""
 """
 
 
+
+WEBTRN_AUTOPLAY_EXPRESSION = r"""
+(async () => {
+  const textOf = (el) => (el?.innerText || el?.textContent || '').trim();
+  const host = location.hostname.toLowerCase();
+  const path = location.pathname;
+
+  if (host.includes('scszj.webtrn.cn') && path.includes('/cms/classDetailNew.htm')) {
+    const courses = Array.from(document.querySelectorAll('li.class2Li')).map((row) => {
+      const titleLink = row.querySelector('a.v2-title');
+      const progressText = textOf(row.querySelector('em.color-theme')).replace('%', '');
+      const progress = Number.isFinite(Number(progressText)) ? Number(progressText) : 0;
+      return {
+        title: textOf(titleLink),
+        href: titleLink?.href || '',
+        progress
+      };
+    }).filter((course) => course.href);
+    const nextCourse = courses.find((course) => course.progress < 100);
+    if (nextCourse) {
+      setTimeout(() => { location.href = nextCourse.href; }, 150);
+      return {
+        site: 'webtrn-class',
+        action: 'open-course',
+        lesson: nextCourse.title,
+        nextLesson: nextCourse.title,
+        progressPct: nextCourse.progress,
+        courseCount: courses.length
+      };
+    }
+    return { site: 'webtrn-class', action: 'complete', courseCount: courses.length };
+  }
+
+  if (host.includes('scszj.webtrn.cn') && path.includes('/cms/classCourseDetailNew.htm')) {
+    const button = document.querySelector('#audition') || document.querySelector('a.btn-theme');
+    const onclick = button?.getAttribute('onclick') || '';
+    const match = onclick.match(/'(https?:\/\/[^']*signLearn\.action[^']*)'/);
+    const targetUrl = match?.[1]?.replace(/&amp;/g, '&') || '';
+    if (targetUrl) {
+      setTimeout(() => { location.href = targetUrl; }, 150);
+      return { site: 'webtrn-course', action: 'open-player', lesson: textOf(document.querySelector('h1')), targetUrl };
+    }
+    return { site: 'webtrn-course', action: 'wait-player', lesson: textOf(document.querySelector('h1')) };
+  }
+
+  const outerFrame = document.querySelector('#mainContent');
+  const outerDoc = outerFrame?.contentDocument || null;
+  const innerFrame = outerDoc?.querySelector('#mainFrame') || null;
+  const innerDoc = innerFrame?.contentDocument || null;
+  const video = innerDoc?.querySelector('video') || null;
+  const resources = Array.from(outerDoc?.querySelectorAll('.s_point[itemtype="video"]') || []);
+  const currentId = innerFrame?.src ? new URL(innerFrame.src).searchParams.get('params.itemId') : null;
+  const activeIndex = resources.findIndex((item) => item.id === `s_point_${currentId}`);
+  const active = activeIndex >= 0 ? resources[activeIndex] : null;
+  const isCompleted = (item) => item?.getAttribute('completestate') === '1';
+  const findNextIncomplete = (start) => {
+    for (let index = Math.max(0, start); index < resources.length; index += 1) {
+      if (!isCompleted(resources[index])) return { item: resources[index], index };
+    }
+    return null;
+  };
+  const firstIncomplete = activeIndex < 0 ? findNextIncomplete(0) : null;
+  const nextIncomplete = activeIndex >= 0 ? findNextIncomplete(activeIndex + 1) : null;
+  const base = {
+    site: 'webtrn-player',
+    lesson: active?.title || '',
+    title: document.title,
+    url: location.href,
+    resourceIndex: activeIndex >= 0 ? activeIndex + 1 : 0,
+    resourceCount: resources.length,
+    hidden: document.hidden,
+    visibility: document.visibilityState,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  };
+
+  if (activeIndex < 0 && firstIncomplete) {
+    firstIncomplete.item.click();
+    return { ...base, action: 'select-resource', nextLesson: firstIncomplete.item.title, nextResourceIndex: firstIncomplete.index + 1 };
+  }
+  if (!video) {
+    return { ...base, action: 'wait-video', paused: null, currentTime: null, duration: null };
+  }
+
+  const desiredPlaybackRate = Number('__COURSE_PLAYBACK_RATE__');
+  if (Number.isFinite(desiredPlaybackRate) && video.playbackRate !== desiredPlaybackRate) {
+    video.playbackRate = desiredPlaybackRate;
+  }
+  const state = {
+    ...base,
+    paused: video.paused,
+    ended: video.ended,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+    duration: Number.isFinite(video.duration) ? video.duration : 0,
+    playbackRate: video.playbackRate,
+    readyState: video.readyState
+  };
+  const nearEnd = video.ended || (
+    Number.isFinite(video.duration) && video.duration > 0 && video.currentTime >= video.duration - 0.35
+  );
+  if (nearEnd && nextIncomplete) {
+    nextIncomplete.item.click();
+    return { ...state, action: 'next-resource', nextLesson: nextIncomplete.item.title, nextResourceIndex: nextIncomplete.index + 1 };
+  }
+  if (nearEnd) {
+    return { ...state, action: 'course-complete' };
+  }
+  if (video.paused && video.readyState >= 2) {
+    const playButton = innerDoc.querySelector('#player_pause');
+    if (playButton) playButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { ...state, paused: video.paused, action: video.paused ? 'needs-user-gesture' : 'resume' };
+  }
+  return { ...state, action: video.paused ? 'wait-player' : 'playing' };
+})()
+"""
+
+WEBTRN_PLAYBACK_RECOVERY_EXPRESSION = r"""
+(async () => {
+  const outerDoc = document.querySelector('#mainContent')?.contentDocument || null;
+  const innerDoc = outerDoc?.querySelector('#mainFrame')?.contentDocument || null;
+  const video = innerDoc?.querySelector('video') || null;
+  if (!video) return { ok: false, reason: 'no-video' };
+  const before = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  let playError = null;
+  if (video.paused) {
+    try {
+      const button = innerDoc.querySelector('#player_pause');
+      if (button) button.click();
+      else await video.play();
+    } catch (error) {
+      playError = { name: error?.name || 'Error', message: error?.message || String(error) };
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  return {
+    ok: !video.paused,
+    reason: video.paused ? 'still-paused' : 'playing',
+    before,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+    duration: Number.isFinite(video.duration) ? video.duration : 0,
+    paused: video.paused,
+    ended: video.ended,
+    readyState: video.readyState,
+    playbackRate: video.playbackRate,
+    playError
+  };
+})()
+"""
+
+WEBTRN_PLAYBACK_TOGGLE_EXPRESSION = r"""
+(async () => {
+  const outerDoc = document.querySelector('#mainContent')?.contentDocument || null;
+  const innerDoc = outerDoc?.querySelector('#mainFrame')?.contentDocument || null;
+  const video = innerDoc?.querySelector('video') || null;
+  if (!video) return { ok: false, reason: 'no-video' };
+  const button = innerDoc.querySelector('#player_pause');
+  if (video.paused) {
+    if (button) button.click();
+    else await video.play();
+  } else {
+    video.pause();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return { ok: true, paused: video.paused, currentTime: video.currentTime };
+})()
+"""
+
+WEBTRN_NEXT_VIDEO_EXPRESSION = r"""
+(() => {
+  const outerDoc = document.querySelector('#mainContent')?.contentDocument || null;
+  const innerFrame = outerDoc?.querySelector('#mainFrame') || null;
+  const resources = Array.from(outerDoc?.querySelectorAll('.s_point[itemtype="video"]') || []);
+  const currentId = innerFrame?.src ? new URL(innerFrame.src).searchParams.get('params.itemId') : null;
+  const index = resources.findIndex((item) => item.id === `s_point_${currentId}`);
+  let targetIndex = index < 0 ? 0 : index + 1;
+  while (targetIndex < resources.length && resources[targetIndex].getAttribute('completestate') === '1') targetIndex += 1;
+  if (targetIndex >= resources.length) return { ok: false, reason: 'at-end', from: resources[index]?.title || '', index: index + 1, count: resources.length };
+  const target = resources[targetIndex];
+  target.click();
+  return { ok: true, site: 'webtrn', from: resources[index]?.title || '', to: target.title, index: index + 1, nextIndex: targetIndex + 1, skippedCompleted: targetIndex > index + 1, count: resources.length };
+})()
+"""
+
+WEBTRN_PREVIOUS_VIDEO_EXPRESSION = r"""
+(() => {
+  const outerDoc = document.querySelector('#mainContent')?.contentDocument || null;
+  const innerFrame = outerDoc?.querySelector('#mainFrame') || null;
+  const resources = Array.from(outerDoc?.querySelectorAll('.s_point[itemtype="video"]') || []);
+  const currentId = innerFrame?.src ? new URL(innerFrame.src).searchParams.get('params.itemId') : null;
+  const index = resources.findIndex((item) => item.id === `s_point_${currentId}`);
+  if (index < 0) return { ok: false, reason: 'no-active', count: resources.length };
+  if (index <= 0) return { ok: false, reason: 'at-start', from: resources[index]?.title || '', index: index + 1, count: resources.length };
+  const target = resources[index - 1];
+  target.click();
+  return { ok: true, site: 'webtrn', from: resources[index]?.title || '', to: target.title, index: index + 1, previousIndex: index, count: resources.length };
+})()
+"""
+
+WEBTRN_RESUME_VIDEO_EXPRESSION = r"""
+(async () => {
+  const targetIndex = Math.max(0, Number('__RESUME_INDEX__') - 1);
+  const savedTime = Math.max(0, Number('__RESUME_TIME__') || 0);
+  const getOuter = () => document.querySelector('#mainContent')?.contentDocument || null;
+  let outerDoc = getOuter();
+  let resources = Array.from(outerDoc?.querySelectorAll('.s_point[itemtype="video"]') || []);
+  if (!resources.length || targetIndex >= resources.length) return { ok: false, reason: 'not-found', targetIndex: targetIndex + 1, count: resources.length };
+  const innerFrame = outerDoc.querySelector('#mainFrame');
+  const currentId = innerFrame?.src ? new URL(innerFrame.src).searchParams.get('params.itemId') : null;
+  const currentIndex = resources.findIndex((item) => item.id === `s_point_${currentId}`);
+  if (currentIndex !== targetIndex) {
+    resources[targetIndex].click();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    outerDoc = getOuter();
+    resources = Array.from(outerDoc?.querySelectorAll('.s_point[itemtype="video"]') || []);
+  }
+  let video = null;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const frame = getOuter()?.querySelector('#mainFrame');
+    video = frame?.contentDocument?.querySelector('video') || null;
+    if (video && video.readyState >= 1 && Number.isFinite(video.duration)) break;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  if (!video) return { ok: false, reason: 'wait-video', targetIndex: targetIndex + 1 };
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  let targetTime = savedTime;
+  if (duration > 0) {
+    targetTime = Math.min(targetTime, duration);
+    if (savedTime >= duration - 3) targetTime = 0;
+  }
+  if (targetTime > 0 && video.currentTime < targetTime - 1) {
+    try { video.currentTime = targetTime; } catch (_) {}
+  }
+  return { ok: true, site: 'webtrn', targetIndex: targetIndex + 1, lesson: resources[targetIndex]?.title || '', targetTime, currentTime: video.currentTime, duration, changed: currentIndex !== targetIndex };
+})()
+"""
+
+
+def is_webtrn_course(course_url: str) -> bool:
+    return "webtrn.cn" in str(course_url or "").lower()
+
+
+def playback_recovery_expression(course_url: str) -> str:
+    if is_webtrn_course(course_url):
+        return WEBTRN_PLAYBACK_RECOVERY_EXPRESSION
+    return PLAYBACK_RECOVERY_EXPRESSION
+
+
+def playback_toggle_expression(course_url: str) -> str:
+    if is_webtrn_course(course_url):
+        return WEBTRN_PLAYBACK_TOGGLE_EXPRESSION
+    return PLAYBACK_TOGGLE_EXPRESSION
+
 def is_cdwork_course(course_url: str) -> bool:
     return "cdwork.cn" in str(course_url or "").lower()
 
 
 def render_expression(playback_rate: float = 1.0, course_url: str = "") -> str:
-    template = CDWORK_AUTOPLAY_EXPRESSION if is_cdwork_course(course_url) else AUTOPLAY_EXPRESSION
+    if is_webtrn_course(course_url):
+        template = WEBTRN_AUTOPLAY_EXPRESSION
+    elif is_cdwork_course(course_url):
+        template = CDWORK_AUTOPLAY_EXPRESSION
+    else:
+        template = AUTOPLAY_EXPRESSION
     return template.replace(PLAYBACK_RATE_TOKEN, str(playback_rate))
 
 
 def next_video_expression(course_url: str) -> str:
-    return CDWORK_NEXT_VIDEO_EXPRESSION if is_cdwork_course(course_url) else NEXT_VIDEO_EXPRESSION
+    if is_webtrn_course(course_url):
+        return WEBTRN_NEXT_VIDEO_EXPRESSION
+    if is_cdwork_course(course_url):
+        return CDWORK_NEXT_VIDEO_EXPRESSION
+    return NEXT_VIDEO_EXPRESSION
 
 
 def previous_video_expression(course_url: str) -> str:
-    return CDWORK_PREVIOUS_VIDEO_EXPRESSION if is_cdwork_course(course_url) else PREVIOUS_VIDEO_EXPRESSION
+    if is_webtrn_course(course_url):
+        return WEBTRN_PREVIOUS_VIDEO_EXPRESSION
+    if is_cdwork_course(course_url):
+        return CDWORK_PREVIOUS_VIDEO_EXPRESSION
+    return PREVIOUS_VIDEO_EXPRESSION
 
 
 NEXT_VIDEO_EXPRESSION = r"""
@@ -898,7 +1164,12 @@ RESUME_VIDEO_EXPRESSION = r"""
 
 
 def render_resume_expression(resource_index: int, current_time: float, course_url: str = "") -> str:
-    template = CDWORK_RESUME_VIDEO_EXPRESSION if is_cdwork_course(course_url) else RESUME_VIDEO_EXPRESSION
+    if is_webtrn_course(course_url):
+        template = WEBTRN_RESUME_VIDEO_EXPRESSION
+    elif is_cdwork_course(course_url):
+        template = CDWORK_RESUME_VIDEO_EXPRESSION
+    else:
+        template = RESUME_VIDEO_EXPRESSION
     return (
         template
         .replace("__RESUME_INDEX__", str(max(1, int(resource_index or 1))))
